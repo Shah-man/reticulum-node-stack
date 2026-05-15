@@ -1,0 +1,29 @@
+=== ПРИЛОЖЕНИЯ RETICULUM ===
+
+== MESHCHATX ==
+MeshChatX — лучший LXMF клиент для ПК (Windows/Linux/Mac) и Android.
+Поддерживает чат, работу с группами, просмотр страниц на узлах, передачу файлов и голосовые сообщения.
+Скачать: https://git.quad4.io/RNS-Things/MeshChatX/releases
+
+== COLUMBA ==
+Columba — LXMF клиент для Android с поддержкой голосовых звонков.
+Скачать: https://github.com/torlando-tech/columba/releases
+
+== SIDEBAND ==
+Sideband — графический LXMF клиент с расширенными возможностями.
+
+Android: скачай APK с https://github.com/markqvist/Sideband/releases
+Linux: pip install sbapp
+
+== NOMADNET ==
+NomadNet — текстовый браузер для Reticulum.
+Позволяет просматривать страницы на узлах сети.
+
+pip install nomadnet
+Запуск: nomadnet
+
+== КАКОЙ КЛИЕНТ ВЫБРАТЬ ==
+- MeshChatX — для ПК и Android
+- Columba — для Android
+- Sideband — для Android/Linux, расширенные возможности
+- NomadNet — для просмотра страниц узлов (терминал)

@@ -1,0 +1,72 @@
+== ОФИЦИАЛЬНЫЕ ПРОШИВКИ RNODE ==
+Официальные прошивки RNode Firmware созданы Марком Квистом (создатель Reticulum).
+Скачать все официальные прошивки: https://github.com/markqvist/RNode_Firmware/releases
+
+=== ПРОШИВКИ УСТРОЙСТВ ===
+
+== HELTEC T114 ==
+Устройство на nRF52840 + SX1262, компактное, низкое энергопотребление.
+Скачать: /get t114
+Прошивка RNode firmware:
+1. Установи: pip install rns
+2. Подключи устройство по USB
+3. Запусти: rnodeconf --autoinstall
+4. Выбери "Heltec T114" из списка
+5. Дождись завершения
+
+== HELTEC LORA32 ==
+Heltec LoRa32 V2/V3/V4 — устройства на ESP32.
+Недорогие, популярные, хорошо поддерживаются.
+Скачать: /get lora32v2 или /get lora32v3 или /get heltec32v4
+1. pip install rns
+2. Подключи по USB
+3. rnodeconf --autoinstall
+4. Выбери версию (V2, V3 или V4)
+
+== LILYGO T-BEAM ==
+LilyGO T-Beam — ESP32 + LoRa + GPS.
+Скачать: /get tbeam или /get tbeam_supreme
+1. pip install rns
+2. rnodeconf --autoinstall
+3. Выбери версию T-Beam (v1.0, v1.1, Supreme)
+
+== LILYGO T-DECK ==
+LilyGO T-Deck — устройство с экраном и клавиатурой.
+Скачать: /get tdeck
+rnodeconf --autoinstall → выбери T-Deck
+
+== RAK WISBLOCK ==
+RAK4631 — модуль на nRF52840 + SX1262.
+Скачать: /get rak4631
+rnodeconf --autoinstall → выбери RAK4631
+
+== РЕШЕНИЕ ПРОБЛЕМ ==
+RNode не определяется:
+- Проверь USB кабель (нужен data-кабель, не только зарядка)
+- Linux: sudo usermod -a -G dialout $USER
+- Перезайди в систему после команды
+
+Нет связи с propagation node:
+- Проверь интернет
+- rnprobe f89ede8428bb261e3e2a935dfe920f40
+
+== ЧТО ТАКОЕ RNODE ==
+RNode — это устройство с прошивкой RNode Firmware, которое работает как модем для Reticulum.
+Обычное LoRa устройство нужно сначала прошить через rnodeconf --autoinstall.
+
+Где скачать прошивки:
+- Команда /files — покажет список всех доступных прошивок
+- Команда /get <имя> — скачать прошивку из списка (например: /get t114, /get tbeam)
+- Скачать можно ТОЛЬКО файлы из списка /files, произвольные файлы недоступны
+- GitHub: https://github.com/markqvist/RNode_Firmware/releases
+Инструменты LXMF (группы, боты): https://github.com/SebastianObi/LXMF-Tools
+
+== НЕСОВМЕСТИМЫЕ МОДУЛИ ==
+E220-900M30S (чип LLCC68) — НЕ поддерживается Meshtastic и MeshCore!
+E32 модули — не все совместимы.
+Любые модули на LLCC68 — не работают с Meshtastic/MeshCore.
+
+Meshtastic/MeshCore работают ТОЛЬКО с чипами: SX1262, SX1276, SX1278, SX1280.
+Используй готовые устройства: Heltec, LilyGO T-Beam, RAK.
+
+ВАЖНО: RNode прошивка — для Reticulum, НЕ для Meshtastic! Это разные системы.

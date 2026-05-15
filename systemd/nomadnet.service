@@ -1,0 +1,15 @@
+[Unit]
+Description=NomadNet Propagation Node SURGUT
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/user/reticulum
+ExecStart=/home/user/reticulum/venv/bin/nomadnet --daemon
+Restart=always
+RestartSec=10
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

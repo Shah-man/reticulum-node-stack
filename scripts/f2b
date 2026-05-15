@@ -1,0 +1,518 @@
+#!/bin/bash
+
+# ============================================
+#   FAIL2BAN MANAGER by Shah | Alpha4090
+#   v2.0 - с recidive и таймерами
+# ============================================
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+WHITE='\033[1;37m'
+GRAY='\033[0;37m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+F2B_PASS_FILE="/etc/f2b.secret"
+
+# ══════════════════════════════════════════════════════════════════
+# ЧТЕНИЕ КЛАВИШ (с поддержкой ESC)
+# ══════════════════════════════════════════════════════════════════
+
+read_key() {
+  local key=""
+  IFS= read -rsn1 key
+  
+  if [[ "$key" == $'\e' ]]; then
+    read -rsn2 -t 0.1 extra
+    if [ -z "$extra" ]; then
+      echo "ESC"
+      return
+    fi
+  fi
+  
+  echo "$key"
+}
+
+# ══════════════════════════════════════════════════════════════════
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# ══════════════════════════════════════════════════════════════════
+
+check_password() {
+  if [ ! -f "$F2B_PASS_FILE" ]; then
+    echo -e "  ${RED}✗ Файл с паролем не найден: $F2B_PASS_FILE${NC}"
+    echo -e "  ${YELLOW}Создай его: echo 'пароль' > $F2B_PASS_FILE && chmod 600 $F2B_PASS_FILE${NC}"
+    sleep 2
+    return 1
+  fi
+  F2B_PASSWORD=$(cat "$F2B_PASS_FILE")
+  echo ""
+  echo -e "  ${GRAY}(ESC = отмена)${NC}"
+  echo -e -n "  ${YELLOW}🔑 Введи пароль: ${NC}"
+  
+  local INPUT_PASS=""
+  local char=""
+  
+  while true; do
+    IFS= read -rsn1 char
+    
+    # ESC
+    if [[ "$char" == $'\e' ]]; then
+      read -rsn2 -t 0.1 extra
+      if [ -z "$extra" ]; then
+        echo ""
+        echo -e "  ${GRAY}Отменено${NC}"
+        sleep 0.5
+        return 1
+      fi
+    fi
+    
+    # Enter
+    if [[ "$char" == "" ]]; then
+      echo ""
+      break
+    fi
+    
+    # Backspace
+    if [[ "$char" == $'\x7f' ]]; then
+      if [ -n "$INPUT_PASS" ]; then
+        INPUT_PASS="${INPUT_PASS%?}"
+        echo -ne "\b \b"
+      fi
+      continue
+    fi
+    
+    INPUT_PASS+="$char"
+    echo -n "*"
+  done
+  
+  if [ "$INPUT_PASS" != "$F2B_PASSWORD" ]; then
+    echo -e "  ${RED}✗ Неверный пароль!${NC}"
+    sleep 1
+    return 1
+  fi
+  return 0
+}
+
+header() {
+  clear
+  echo ""
+  echo -e "${CYAN}────────────────────────────────────────${NC}"
+  echo -e "${WHITE}${BOLD}  🛡️  FAIL2BAN MANAGER | Alpha4090${NC}"
+  echo -e "${GRAY}       surgut86.duckdns.org${NC}"
+  echo -e "${CYAN}────────────────────────────────────────${NC}"
+  echo ""
+}
+
+status_line() {
+  local STATUS=$(systemctl is-active fail2ban)
+  if [ "$STATUS" = "active" ]; then
+    echo -e "  Статус fail2ban: ${GREEN}● активен${NC}"
+  else
+    echo -e "  Статус fail2ban: ${RED}● не активен${NC}"
+  fi
+  echo ""
+}
+
+press_enter() {
+  echo ""
+  echo -e -n "  ${GRAY}Нажми Enter для продолжения...${NC}"
+  read
+}
+
+format_time() {
+  local seconds=$1
+  if [ "$seconds" -ge 86400 ]; then
+    local days=$((seconds / 86400))
+    local hours=$(((seconds % 86400) / 3600))
+    echo "${days}д ${hours}ч"
+  elif [ "$seconds" -ge 3600 ]; then
+    local hours=$((seconds / 3600))
+    local mins=$(((seconds % 3600) / 60))
+    echo "${hours}ч ${mins}м"
+  elif [ "$seconds" -ge 60 ]; then
+    local mins=$((seconds / 60))
+    echo "${mins}м"
+  else
+    echo "${seconds}с"
+  fi
+}
+
+# ══════════════════════════════════════════════════════════════════
+# СТАТУС
+# ══════════════════════════════════════════════════════════════════
+
+show_status() {
+  header
+  echo -e "${BOLD}${BLUE}📊 ОБЩИЙ СТАТУС${NC}"
+  echo -e "${GRAY}────────────────────────────────────────${NC}"
+  status_line
+
+  # Текущие данные из fail2ban-client
+  local BANNED=$(sudo fail2ban-client status sshd 2>/dev/null | grep "Currently banned" | awk '{print $NF}')
+  local FAILED=$(sudo fail2ban-client status sshd 2>/dev/null | grep "Currently failed" | awk '{print $NF}')
+  
+  # Исторические данные из базы
+  local TOTAL_SSHD=$(sudo sqlite3 /var/lib/fail2ban/fail2ban.sqlite3 "SELECT COUNT(*) FROM bans WHERE jail='sshd'" 2>/dev/null)
+  local TOTAL_FAILED=$(sudo sqlite3 /var/lib/fail2ban/fail2ban.sqlite3 "SELECT COUNT(DISTINCT ip) FROM bans WHERE jail='sshd'" 2>/dev/null)
+
+  echo -e "  ${WHITE}SSH Jail (бан: 1 час):${NC}"
+  echo -e "  ├─ Сейчас заблокировано IP: ${RED}${BOLD}${BANNED:-0}${NC}"
+  echo -e "  ├─ Сейчас неудачных попыток: ${YELLOW}${FAILED:-0}${NC}"
+  echo -e "  ├─ Всего банов (из базы):    ${RED}${TOTAL_SSHD:-0}${NC}"
+  echo -e "  └─ Уникальных IP забанено:   ${YELLOW}${TOTAL_FAILED:-0}${NC}"
+  echo ""
+
+  # Recidive данные
+  local REC_BANNED=$(sudo fail2ban-client status recidive 2>/dev/null | grep "Currently banned" | awk '{print $NF}')
+  local REC_FAILED=$(sudo fail2ban-client status recidive 2>/dev/null | grep "Currently failed" | awk '{print $NF}')
+  local TOTAL_REC=$(sudo sqlite3 /var/lib/fail2ban/fail2ban.sqlite3 "SELECT COUNT(*) FROM bans WHERE jail='recidive'" 2>/dev/null)
+  local RECIDIVISTS=$(sudo sqlite3 /var/lib/fail2ban/fail2ban.sqlite3 "SELECT COUNT(*) FROM (SELECT ip FROM bans WHERE jail='sshd' GROUP BY ip HAVING COUNT(*) >= 2)" 2>/dev/null)
+
+  echo -e "  ${WHITE}Recidive Jail (бан: 1 неделя):${NC}"
+  echo -e "  ├─ Сейчас заблокировано IP: ${RED}${BOLD}${REC_BANNED:-0}${NC}"
+  echo -e "  ├─ На карандаше (2+ бана):   ${YELLOW}${RECIDIVISTS:-0}${NC}"
+  echo -e "  └─ Всего банов (из базы):    ${RED}${TOTAL_REC:-0}${NC}"
+  echo ""
+
+  press_enter
+}
+
+# ══════════════════════════════════════════════════════════════════
+# СПИСОК ЗАБАНЕННЫХ С ТАЙМЕРАМИ
+# ══════════════════════════════════════════════════════════════════
+
+show_banned_details() {
+  header
+  echo -e "${BOLD}${BLUE}🚫 ЗАБЛОКИРОВАННЫЕ IP (с таймерами)${NC}"
+  echo -e "${GRAY}────────────────────────────────────────${NC}"
+  echo ""
+
+  local current_time=$(date +%s)
+
+  # SSH Jail
+  local SSHD_IPS=$(sudo fail2ban-client status sshd 2>/dev/null | grep "Banned IP list" | cut -d: -f2)
+  if [ -n "$SSHD_IPS" ]; then
+    echo -e "  ${WHITE}📌 SSH Jail (бан: 1 час):${NC}"
+    for IP in $SSHD_IPS; do
+      local expires=$(sudo sqlite3 /var/lib/fail2ban/fail2ban.sqlite3 "SELECT timeofban + 3600 FROM bans WHERE jail='sshd' AND ip='$IP' ORDER BY timeofban DESC LIMIT 1" 2>/dev/null)
+      if [ -n "$expires" ]; then
+        local remaining=$((expires - current_time))
+        if [ "$remaining" -gt 0 ]; then
+          echo -e "    ${RED}🚫 $IP${NC} — осталось ${YELLOW}$(format_time $remaining)${NC}"
+        else
+          echo -e "    ${RED}🚫 $IP${NC} — ${GREEN}скоро разбанится${NC}"
+        fi
+      else
+        echo -e "    ${RED}🚫 $IP${NC}"
+      fi
+    done
+    echo ""
+  fi
+
+  # Recidive Jail
+  local REC_IPS=$(sudo fail2ban-client status recidive 2>/dev/null | grep "Banned IP list" | cut -d: -f2)
+  if [ -n "$REC_IPS" ]; then
+    echo -e "  ${WHITE}🔥 Recidive Jail (бан: 1 неделя):${NC}"
+    for IP in $REC_IPS; do
+      local expires=$(sudo sqlite3 /var/lib/fail2ban/fail2ban.sqlite3 "SELECT timeofban + 604800 FROM bans WHERE jail='recidive' AND ip='$IP' ORDER BY timeofban DESC LIMIT 1" 2>/dev/null)
+      if [ -n "$expires" ]; then
+        local remaining=$((expires - current_time))
+        if [ "$remaining" -gt 0 ]; then
+          echo -e "    ${RED}🔥 $IP${NC} — осталось ${YELLOW}$(format_time $remaining)${NC}"
+        else
+          echo -e "    ${RED}🔥 $IP${NC} — ${GREEN}скоро разбанится${NC}"
+        fi
+      else
+        echo -e "    ${RED}🔥 $IP${NC}"
+      fi
+    done
+    echo ""
+  fi
+
+  # На карандаше
+  local REC_FAILED=$(sudo fail2ban-client status recidive 2>/dev/null | grep "Currently failed" | awk '{print $NF}')
+  if [ "${REC_FAILED:-0}" -gt 0 ]; then
+    echo -e "  ${WHITE}⚠️  На карандаше (ждут 3-й бан → неделя):${NC}"
+    sudo sqlite3 /var/lib/fail2ban/fail2ban.sqlite3 "SELECT ip, COUNT(*) as cnt FROM bans WHERE jail='sshd' GROUP BY ip HAVING cnt >= 2 ORDER BY cnt DESC LIMIT 10" 2>/dev/null | \
+      while IFS='|' read IP COUNT; do
+        echo -e "    ${YELLOW}⚠️  $IP${NC} — ${WHITE}$COUNT${NC} бан(а/ов)"
+      done
+    echo ""
+  fi
+
+  if [ -z "$SSHD_IPS" ] && [ -z "$REC_IPS" ]; then
+    echo -e "  ${GREEN}✓ Нет заблокированных IP${NC}"
+    echo ""
+  fi
+
+  press_enter
+}
+
+# ══════════════════════════════════════════════════════════════════
+# ЛОГИ
+# ══════════════════════════════════════════════════════════════════
+
+show_log() {
+  header
+  echo -e "${BOLD}${BLUE}📋 ПОСЛЕДНИЕ 30 СОБЫТИЙ${NC}"
+  echo -e "${GRAY}────────────────────────────────────────${NC}"
+  echo ""
+  sudo tail -n 30 /var/log/fail2ban.log | while IFS= read -r line; do
+    if echo "$line" | grep -q "\[recidive\] Ban"; then
+      echo -e "${MAGENTA}${BOLD}$line${NC}"
+    elif echo "$line" | grep -q "Ban"; then
+      echo -e "${RED}$line${NC}"
+    elif echo "$line" | grep -q "Unban"; then
+      echo -e "${GREEN}$line${NC}"
+    elif echo "$line" | grep -q "\[recidive\] Found"; then
+      echo -e "${MAGENTA}$line${NC}"
+    elif echo "$line" | grep -q "WARNING\|Found"; then
+      echo -e "${YELLOW}$line${NC}"
+    elif echo "$line" | grep -q "ERROR"; then
+      echo -e "${RED}${BOLD}$line${NC}"
+    else
+      echo -e "${GRAY}$line${NC}"
+    fi
+  done
+  echo ""
+  press_enter
+}
+
+# ══════════════════════════════════════════════════════════════════
+# СТАТИСТИКА АТАК
+# ══════════════════════════════════════════════════════════════════
+
+show_attacks() {
+  header
+  echo -e "${BOLD}${BLUE}⚔️  СТАТИСТИКА АТАК (топ IP)${NC}"
+  echo -e "${GRAY}────────────────────────────────────────${NC}"
+  echo ""
+  echo -e "  ${WHITE}Самые активные атакующие (из базы):${NC}"
+  echo ""
+  
+  local RESULT=$(sudo sqlite3 /var/lib/fail2ban/fail2ban.sqlite3 "SELECT ip, COUNT(*) as cnt FROM bans WHERE jail='sshd' GROUP BY ip ORDER BY cnt DESC LIMIT 15" 2>/dev/null)
+  
+  if [ -n "$RESULT" ]; then
+    echo "$RESULT" | while IFS='|' read IP COUNT; do
+      if [ "$COUNT" -ge 3 ]; then
+        echo -e "    ${RED}🔥 $COUNT бан(ов)${NC} — ${YELLOW}$IP${NC} ${RED}(рецидивист!)${NC}"
+      elif [ "$COUNT" -ge 2 ]; then
+        echo -e "    ${YELLOW}⚠️  $COUNT бан(а)${NC} — ${YELLOW}$IP${NC}"
+      else
+        echo -e "    ${GRAY}   $COUNT бан${NC} — ${GRAY}$IP${NC}"
+      fi
+    done
+  else
+    echo -e "  ${GRAY}База пуста${NC}"
+  fi
+  
+  echo ""
+  echo -e "${GRAY}────────────────────────────────────────${NC}"
+  
+  # Статистика за всё время
+  local TOTAL_BANS=$(sudo sqlite3 /var/lib/fail2ban/fail2ban.sqlite3 "SELECT COUNT(*) FROM bans" 2>/dev/null)
+  local UNIQUE_IPS=$(sudo sqlite3 /var/lib/fail2ban/fail2ban.sqlite3 "SELECT COUNT(DISTINCT ip) FROM bans" 2>/dev/null)
+  local RECIDIVISTS=$(sudo sqlite3 /var/lib/fail2ban/fail2ban.sqlite3 "SELECT COUNT(*) FROM (SELECT ip FROM bans WHERE jail='sshd' GROUP BY ip HAVING COUNT(*) >= 2)" 2>/dev/null)
+  
+  echo -e "  ${WHITE}📊 Всего за всё время:${NC}"
+  echo -e "     Банов: ${RED}${TOTAL_BANS:-0}${NC}"
+  echo -e "     Уникальных IP: ${YELLOW}${UNIQUE_IPS:-0}${NC}"
+  echo -e "     Рецидивистов (2+ бана): ${RED}${RECIDIVISTS:-0}${NC}"
+  echo ""
+  
+  press_enter
+}
+
+# ══════════════════════════════════════════════════════════════════
+# БЛОКИРОВКА/РАЗБЛОКИРОВКА
+# ══════════════════════════════════════════════════════════════════
+
+unban_ip() {
+  header
+  echo -e "${BOLD}${BLUE}🔓 РАЗБЛОКИРОВАТЬ IP${NC}"
+  echo -e "${GRAY}────────────────────────────────────────${NC}"
+  check_password || return
+  echo -e "${GRAY}────────────────────────────────────────${NC}"
+  echo ""
+  
+  local SSHD_IPS=$(sudo fail2ban-client status sshd 2>/dev/null | grep "Banned IP list" | cut -d: -f2)
+  local REC_IPS=$(sudo fail2ban-client status recidive 2>/dev/null | grep "Banned IP list" | cut -d: -f2)
+  
+  if [ -z "$SSHD_IPS" ] && [ -z "$REC_IPS" ]; then
+    echo -e "  ${GREEN}Нет заблокированных IP${NC}"
+  else
+    if [ -n "$SSHD_IPS" ]; then
+      echo -e "  ${WHITE}SSH Jail:${NC}"
+      for IP in $SSHD_IPS; do
+        echo -e "    ${RED}🚫 $IP${NC}"
+      done
+    fi
+    if [ -n "$REC_IPS" ]; then
+      echo -e "  ${WHITE}Recidive Jail:${NC}"
+      for IP in $REC_IPS; do
+        echo -e "    ${RED}🔥 $IP${NC}"
+      done
+    fi
+    echo ""
+    echo -e -n "  ${WHITE}Введи IP для разблокировки: ${NC}"
+    read TARGET_IP
+    if [ -n "$TARGET_IP" ]; then
+      sudo fail2ban-client set sshd unbanip "$TARGET_IP" 2>/dev/null
+      sudo fail2ban-client set recidive unbanip "$TARGET_IP" 2>/dev/null
+      echo -e "  ${GREEN}✓ IP $TARGET_IP разблокирован${NC}"
+    fi
+  fi
+  echo ""
+  press_enter
+}
+
+ban_ip() {
+  header
+  echo -e "${BOLD}${BLUE}🔒 ЗАБЛОКИРОВАТЬ IP ВРУЧНУЮ${NC}"
+  echo -e "${GRAY}────────────────────────────────────────${NC}"
+  check_password || return
+  echo -e "${GRAY}────────────────────────────────────────${NC}"
+  echo ""
+  echo -e -n "  ${WHITE}Введи IP для блокировки: ${NC}"
+  read TARGET_IP
+  if [ -n "$TARGET_IP" ]; then
+    echo -e "  ${WHITE}В какой jail?${NC}"
+    echo -e "  ${GREEN}[1]${NC} sshd (1 час)"
+    echo -e "  ${RED}[2]${NC} recidive (1 неделя)"
+    echo -e -n "  ${CYAN}Выбор: ${NC}"
+    local choice=$(read_key)
+    echo "$choice"
+    case $choice in
+      1) 
+        sudo fail2ban-client set sshd banip "$TARGET_IP" 2>/dev/null
+        echo -e "  ${RED}🚫 IP $TARGET_IP заблокирован на 1 час${NC}"
+        ;;
+      2)
+        sudo fail2ban-client set recidive banip "$TARGET_IP" 2>/dev/null
+        echo -e "  ${RED}🔥 IP $TARGET_IP заблокирован на 1 неделю${NC}"
+        ;;
+      *)
+        echo -e "  ${YELLOW}Отменено${NC}"
+        ;;
+    esac
+  fi
+  echo ""
+  press_enter
+}
+
+# ══════════════════════════════════════════════════════════════════
+# ПЕРЕЗАПУСК
+# ══════════════════════════════════════════════════════════════════
+
+restart_f2b() {
+  header
+  echo -e "${BOLD}${BLUE}🔄 ПЕРЕЗАПУСК FAIL2BAN${NC}"
+  echo -e "${GRAY}────────────────────────────────────────${NC}"
+  check_password || return
+  echo -e "${GRAY}────────────────────────────────────────${NC}"
+  echo ""
+  echo -e "  ${YELLOW}Перезапускаю...${NC}"
+  sudo systemctl restart fail2ban
+  sleep 2
+  local STATUS=$(systemctl is-active fail2ban)
+  if [ "$STATUS" = "active" ]; then
+    echo -e "  ${GREEN}✓ Fail2ban успешно перезапущен${NC}"
+  else
+    echo -e "  ${RED}✗ Ошибка при перезапуске!${NC}"
+  fi
+  echo ""
+  press_enter
+}
+
+edit_config() {
+  header
+  echo -e "${BOLD}${BLUE}⚙️  РЕДАКТИРОВАНИЕ КОНФИГА${NC}"
+  echo -e "${GRAY}────────────────────────────────────────${NC}"
+  check_password || return
+  echo -e "${GRAY}────────────────────────────────────────${NC}"
+  echo ""
+  sudo nano /etc/fail2ban/jail.local
+  echo ""
+  echo -e "  ${YELLOW}Перезапустить fail2ban для применения? (y/n)${NC}"
+  echo -e -n "  ${CYAN}Выбор: ${NC}"
+  local choice=$(read_key)
+  echo "$choice"
+  if [[ "$choice" == "y" ]] || [[ "$choice" == "Y" ]] || [[ "$choice" == "д" ]] || [[ "$choice" == "Д" ]]; then
+    sudo systemctl restart fail2ban
+    sleep 2
+    if systemctl is-active --quiet fail2ban; then
+      echo -e "  ${GREEN}✓ Fail2ban перезапущен${NC}"
+    else
+      echo -e "  ${RED}✗ Ошибка! Проверь конфиг${NC}"
+    fi
+    press_enter
+  fi
+}
+
+# ══════════════════════════════════════════════════════════════════
+# ГЛАВНОЕ МЕНЮ
+# ══════════════════════════════════════════════════════════════════
+
+main_menu() {
+  while true; do
+    header
+    status_line
+    
+    local SSHD_BANNED=$(sudo fail2ban-client status sshd 2>/dev/null | grep "Currently banned" | awk '{print $NF}')
+    local REC_BANNED=$(sudo fail2ban-client status recidive 2>/dev/null | grep "Currently banned" | awk '{print $NF}')
+    local REC_FAILED=$(sudo sqlite3 /var/lib/fail2ban/fail2ban.sqlite3 "SELECT COUNT(*) FROM (SELECT ip FROM bans WHERE jail='sshd' GROUP BY ip HAVING COUNT(*) >= 2)" 2>/dev/null)
+    
+    echo -e "  ${WHITE}Сейчас:${NC} ${RED}${SSHD_BANNED:-0}${NC} в sshd, ${RED}${REC_BANNED:-0}${NC} в recidive"
+    echo -e "         ${YELLOW}${REC_FAILED:-0}${NC} на карандаше"
+    echo ""
+    echo -e "${BOLD}${WHITE}  Выбери действие:${NC}"
+    echo -e "${GRAY}────────────────────────────────────────${NC}"
+    echo -e "  ${GREEN}[1]${NC} 📊 Общий статус"
+    echo -e "  ${GREEN}[2]${NC} 🚫 Заблокированные IP (с таймерами)"
+    echo -e "  ${GREEN}[3]${NC} 📋 Последние события (лог)"
+    echo -e "  ${GREEN}[4]${NC} ⚔️  Статистика атак"
+    echo -e "  ${GREEN}[5]${NC} 🔒 Заблокировать IP вручную"
+    echo -e "  ${GREEN}[6]${NC} 🔓 Разблокировать IP"
+    echo -e "  ${GREEN}[7]${NC} 🔄 Перезапустить fail2ban"
+    echo -e "  ${GREEN}[8]${NC} ⚙️  Редактировать конфиг"
+    echo -e "${GRAY}────────────────────────────────────────${NC}"
+    echo -e "  ${CYAN}[9]${NC} 🌐 Перейти в Reticulum Control (rn)"
+    echo -e "  ${RED}[0]${NC} 🚪 Выход  ${GRAY}(или ESC)${NC}"
+    echo -e "${GRAY}────────────────────────────────────────${NC}"
+    echo -e -n "  ${CYAN}Выбор: ${NC}"
+    
+    local choice=$(read_key)
+    echo "$choice"
+    
+    if [[ "$choice" == "ESC" ]] || [[ "$choice" == "0" ]]; then
+      echo -e "\n  ${CYAN}Сеанс завершён.${NC}\n"
+      exit 0
+    fi
+    
+    case $choice in
+      1) show_status ;;
+      2) show_banned_details ;;
+      3) show_log ;;
+      4) show_attacks ;;
+      5) ban_ip ;;
+      6) unban_ip ;;
+      7) restart_f2b ;;
+      8) edit_config ;;
+      9) 
+        if [ -x "/usr/local/bin/rn" ]; then
+          exec /usr/local/bin/rn --skip-pin
+        else
+          echo -e "  ${RED}Скрипт rn не найден${NC}"
+          press_enter
+        fi
+        ;;
+      *) ;;
+    esac
+  done
+}
+
+main_menu

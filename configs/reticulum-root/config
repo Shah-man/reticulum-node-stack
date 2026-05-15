@@ -1,0 +1,126 @@
+[reticulum]
+  enable_transport = True
+  share_instance = Yes
+  instance_name = default
+
+[logging]
+  loglevel = 5
+
+[interfaces]
+  
+  [[Default Interface]]
+    type = AutoInterface
+    enabled = Yes
+
+  [[RNode LoRa Surgut]]
+    type = RNodeInterface
+    interface_enabled = True
+    port = /dev/rnode
+    frequency = 868762500
+    bandwidth = 125000
+    txpower = 22
+    spreadingfactor = 7
+    codingrate = 7
+
+  [[TCP Server]]
+    type = TCPServerInterface
+    interface_enabled = True
+    listen_ip = 0.0.0.0
+    listen_port = 4242
+
+  [[SPB TCP]]
+    type = TCPClientInterface
+    enabled = yes
+    target_host = 31.129.33.146
+    target_port = 4242
+
+  [[w7rus_novosibirsk]]
+    type = TCPClientInterface
+    enabled = yes
+    target_host = 37.193.84.9
+    target_port = 4242
+  
+  [[VK Cloud whitelist]]
+    type = TCPClientInterface
+    enabled = yes
+    target_host = 212.233.88.164
+    target_port = 4242
+
+  [[First Tula Public Entrypoint]]
+    type = TCPClientInterface
+    enabled = yes
+    target_host = 212.12.24.192     
+    target_port = 4242
+
+  [[rns_jurmala_latvia]]
+    type = TCPClientInterface
+    enabled = yes
+    target_host = rns.morozov.lv     
+    target_port = 4242
+
+  [[SYKTYVKAR]]
+    type = TCPClientInterface
+    enabled = yes
+    target_host = 93.183.127.175
+    target_port = 4242
+
+  [[Vladivostok]]
+    type = TCPClientInterface
+    enabled = yes
+    target_host = rns.mesh-vl.ru
+    target_port = 4242
+
+  [[ADG-1-RNS_Krasnodar]]
+    type = TCPClientInterface
+    enabled = yes
+    target_host = 62.183.96.32
+    target_port = 4242
+
+  [[hyperb0rean_Taganrog]]
+    type = TCPClientInterface
+    enabled = yes
+    target_host = 95.174.109.119  
+    target_port = 4242
+
+  [[xpohuk.ddns.net_Moscow]]
+    type = TCPClientInterface
+    enabled = yes
+    target_host = 77.37.166.237
+    target_port = 4242
+
+  [[rns.sofia_Bulgaria]]
+    type = TCPClientInterface
+    enabled = yes
+    target_host = 193.193.182.147
+    target_port = 4242
+
+  [[Sydney RNS_Australia]]
+    type = TCPClientInterface
+    enabled = yes
+    target_host = sydney.reticulum.au
+    target_port = 4242
+
+  [[LazyWorkHorse_Canada_Montreal]]
+    type = TCPClientInterface
+    enabled = yes
+    target_host = lazyworkhorse.net
+    target_port = 4242
+
+  [[NomadNet SEAsia TCP]]
+    type = TCPClientInterface
+    enabled = yes
+    target_host = rns.jaykayenn.net
+    target_port = 4242
+
+  [[krasnoe_Vladimir]]
+    type = TCPClientInterface
+    enabled = yes
+    target_host = krasnoe.nixm.ru
+    target_port = 4242
+
+  [[Meshtastic Interface]]
+    type = Meshtastic_Interface
+    enabled = false
+    mode = gateway
+    port = /dev/techo
+    data_speed = 7

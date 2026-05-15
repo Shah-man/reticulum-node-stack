@@ -1,0 +1,4661 @@
+#!/bin/bash
+#
+# ╔═══════════════════════════════════════════════════════════════╗
+# ║                    RETICULUM CONTROL                          ║
+# ║         Управление всеми сервисами Reticulum сети             ║
+# ╚═══════════════════════════════════════════════════════════════╝
+#
+# Установка: sudo cp rn /usr/local/bin/ && sudo chmod +x /usr/local/bin/rn
+# Запуск: rn (или кт на русской раскладке)
+#
+
+# ══════════════════════════════════════════════════════════════════
+# КОНФИГУРАЦИЯ
+# ══════════════════════════════════════════════════════════════════
+
+VENV_PATH="/home/user/reticulum/venv"
+WORK_DIR="/home/user/reticulum"
+LOG_FILE="/home/user/reticulum/logs/rn_control.log"
+PAGES_PATH="/root/.nomadnetwork/storage/pages"
+PIN_FILE="/root/.rn_pin"
+SSH_PORT=40904
+
+# Все сервисы (показываются в меню и считаются для статуса)
+SERVICES=(
+    "reticulum.service"
+    "nomadnet.service"
+    "surgut_group.service"
+    "surgutbot86.service"
+    "messageboard.service"
+)
+
+# Сервисы для анонса (без reticulum и messageboard — они не анонсят)
+ANNOUNCE_SERVICES=(
+    "nomadnet.service"
+    "surgut_group.service"
+    "surgutbot86.service"
+)
+
+# Человекочитаемые имена
+declare -A SERVICE_NAMES=(
+    ["reticulum.service"]="🌐 Reticulum Stack"
+    ["nomadnet.service"]="📡 NomadNet Node"
+    ["surgut_group.service"]="👥 SURGUT Group"
+    ["surgutbot86.service"]="🤖 SurgutBot86"
+    ["messageboard.service"]="📋 messageboard"
+)
+
+# Путь к доске объявлений
+BOARD_PATH="/root/.nomadmb/storage/board"
+
+# Пути к данным группы и бота
+GROUP_CONFIG="/root/.config/lxmf_distribution_group_extended"
+BOT_DATA="/home/user/ollama-bot/bot_data"
+
+# ══════════════════════════════════════════════════════════════════
+# ЦВЕТА И ФОРМАТИРОВАНИЕ
+# ══════════════════════════════════════════════════════════════════
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+WHITE='\033[1;37m'
+GRAY='\033[0;90m'
+NC='\033[0m' # No Color
+BOLD='\033[1m'
+
+# Дополнительные оттенки для меню
+LIGHT_BLUE='\033[1;34m'
+LIGHT_GREEN='\033[1;32m'
+LIGHT_PURPLE='\033[1;35m'
+ORANGE='\033[0;33m'
+LIGHT_CYAN='\033[1;36m'
+LIGHT_RED='\033[1;31m'
+PINK='\033[1;35m'
+
+# ══════════════════════════════════════════════════════════════════
+# ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: НИК ПОЛЬЗОВАТЕЛЯ
+# ══════════════════════════════════════════════════════════════════
+
+# Получить ник пользователя по хэшу
+get_user_nick() {
+    local hash="$1"
+    local nick=$(grep "$hash" /root/.config/lxmf_distribution_group_extended/data.cfg 2>/dev/null | head -1 | cut -d'=' -f2 | tr -d ' ')
+    if [ -z "$nick" ]; then
+        echo "$hash"
+    else
+        echo "$nick"
+    fi
+}
+
+# ══════════════════════════════════════════════════════════════════
+# PIN-КОД ЗАЩИТА
+# ══════════════════════════════════════════════════════════════════
+
+# Проверка существования PIN
+check_pin_exists() {
+    [ -f "$PIN_FILE" ]
+}
+
+# Установка нового PIN
+setup_pin() {
+    echo ""
+    echo -e "${CYAN}═══ УСТАНОВКА PIN-КОДА ═══${NC}"
+    echo ""
+    echo -e "${GRAY}PIN защищает опасные действия (остановка сервисов, чаты, отправка)${NC}"
+    echo ""
+    
+    while true; do
+        echo -ne "${WHITE}Введите 4-значный PIN: ${NC}"
+        read -s pin1
+        echo ""
+        
+        if [[ ! "$pin1" =~ ^[0-9]{4}$ ]]; then
+            echo -e "${RED}PIN должен быть 4 цифры!${NC}"
+            continue
+        fi
+        
+        echo -ne "${WHITE}Повторите PIN: ${NC}"
+        read -s pin2
+        echo ""
+        
+        if [ "$pin1" != "$pin2" ]; then
+            echo -e "${RED}PIN не совпадает!${NC}"
+            continue
+        fi
+        
+        echo "$pin1" > "$PIN_FILE"
+        chmod 600 "$PIN_FILE"
+        echo -e "${GREEN}✓ PIN установлен!${NC}"
+        sleep 1
+        break
+    done
+}
+
+# Проверка PIN
+verify_pin() {
+    local action="$1"
+    
+    if ! check_pin_exists; then
+        return 0  # Если PIN не установлен — пропускаем
+    fi
+    
+    local stored_pin=$(cat "$PIN_FILE")
+    
+    echo ""
+    echo -ne "${YELLOW}🔐 PIN для '$action': ${NC}"
+    read -s entered_pin
+    echo ""
+    
+    if [ "$entered_pin" == "$stored_pin" ]; then
+        return 0
+    else
+        echo -e "${RED}✗ Неверный PIN!${NC}"
+        sleep 1
+        return 1
+    fi
+}
+
+# Сброс PIN
+reset_pin() {
+    if ! check_pin_exists; then
+        echo -e "${YELLOW}PIN не установлен${NC}"
+        press_enter
+        return
+    fi
+    
+    if ! verify_pin "сброс PIN"; then
+        return
+    fi
+    
+    echo ""
+    echo -ne "${YELLOW}Удалить PIN? (y = да): ${NC}"
+    read -r confirm
+    
+    if [[ "$confirm" =~ ^[YyДд]$ ]]; then
+        rm -f "$PIN_FILE"
+        echo -e "${GREEN}✓ PIN удалён!${NC}"
+    else
+        echo -e "${GRAY}Отменено${NC}"
+    fi
+    press_enter
+}
+
+# Изменение PIN
+change_pin() {
+    if check_pin_exists; then
+        if ! verify_pin "изменение PIN"; then
+            return
+        fi
+    fi
+    setup_pin
+    press_enter
+}
+
+# ══════════════════════════════════════════════════════════════════
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# ══════════════════════════════════════════════════════════════════
+
+log_action() {
+    local msg="$1"
+    mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $msg" >> "$LOG_FILE"
+}
+
+print_header() {
+    clear
+    echo ""
+    echo -e "${CYAN}════════════════════════════════════${NC}"
+    echo -e "${CYAN}${BOLD}      RETICULUM CONTROL${NC}"
+    echo -e "${CYAN}════════════════════════════════════${NC}"
+    echo -e "      ${GRAY}$(date '+%d.%m.%Y %H:%M:%S')${NC}"
+    echo ""
+}
+
+print_line() {
+    echo -e "${GRAY}────────────────────────────────────${NC}"
+}
+
+press_enter() {
+    echo ""
+    echo -e "${GRAY}Нажми Enter чтобы продолжить...${NC}"
+    read
+}
+
+# Чтение ввода с поддержкой ESC
+read_choice() {
+    local choice=""
+    
+    # Читаем один символ
+    IFS= read -rsn1 choice
+    
+    # Проверяем на ESC последовательность
+    if [[ "$choice" == $'\e' ]]; then
+        # Читаем возможные дополнительные символы (для стрелок и т.д.)
+        read -rsn2 -t 0.1 extra
+        if [ -z "$extra" ]; then
+            # Чистый ESC
+            echo "ESC"
+            return
+        fi
+    fi
+    
+    # Если Enter (пустой ввод после первого символа)
+    if [ -z "$choice" ]; then
+        echo ""
+        return
+    fi
+    
+    # Если цифра или буква — читаем до Enter
+    if [[ "$choice" =~ [0-9a-zA-Zа-яА-Я] ]]; then
+        local rest=""
+        read -r rest
+        echo "${choice}${rest}"
+        return
+    fi
+    
+    echo "$choice"
+}
+
+# Мгновенное чтение одного символа (для меню)
+read_key() {
+    local key=""
+    IFS= read -rsn1 key
+    
+    # Проверяем ESC
+    if [[ "$key" == $'\e' ]]; then
+        read -rsn2 -t 0.1 extra
+        if [ -z "$extra" ]; then
+            echo "ESC"
+            return
+        fi
+    fi
+    
+    echo "$key"
+}
+
+# Конвертация русской раскладки в английскую
+convert_ru_to_en() {
+    local input="$1"
+    echo "$input" | sed 'y/йцукенгшщзхъфывапролджэячсмитьбюЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮ/qwertyuiop[]asdfghjkl;'\''zxcvbnm,.QWERTYUIOP[]ASDFGHJKL;'\''ZXCVBNM,./'
+}
+
+# Проверка статуса сервиса
+get_service_status() {
+    local service=$1
+    if systemctl is-active --quiet "$service" 2>/dev/null; then
+        echo "active"
+    else
+        echo "inactive"
+    fi
+}
+
+# Красивый вывод статуса
+print_service_status() {
+    local service=$1
+    local name="${SERVICE_NAMES[$service]:-$service}"
+    local status=$(get_service_status "$service")
+    
+    if [ "$status" = "active" ]; then
+        echo -e "  ${GREEN}●${NC} $name ${GREEN}[работает]${NC}"
+    else
+        echo -e "  ${RED}●${NC} $name ${RED}[остановлен]${NC}"
+    fi
+}
+
+# Проверка venv
+check_venv_active() {
+    if [[ "$VIRTUAL_ENV" == "$VENV_PATH" ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# ══════════════════════════════════════════════════════════════════
+# ФУНКЦИИ УПРАВЛЕНИЯ СЕРВИСАМИ
+# ══════════════════════════════════════════════════════════════════
+
+start_service() {
+    local service=$1
+    local name="${SERVICE_NAMES[$service]:-$service}"
+    echo -e "${YELLOW}▶${NC} Запускаю $name..."
+    sudo systemctl start "$service"
+    sleep 1
+    if [ "$(get_service_status "$service")" = "active" ]; then
+        echo -e "${GREEN}✓${NC} $name запущен"
+        log_action "STARTED: $service"
+    else
+        echo -e "${RED}✗${NC} Ошибка запуска $name"
+        log_action "FAILED TO START: $service"
+    fi
+}
+
+stop_service() {
+    local service=$1
+    local name="${SERVICE_NAMES[$service]:-$service}"
+    echo -e "${YELLOW}■${NC} Останавливаю $name..."
+    sudo systemctl stop "$service"
+    sleep 1
+    if [ "$(get_service_status "$service")" = "inactive" ]; then
+        echo -e "${GREEN}✓${NC} $name остановлен"
+        log_action "STOPPED: $service"
+    else
+        echo -e "${RED}✗${NC} Ошибка остановки $name"
+        log_action "FAILED TO STOP: $service"
+    fi
+}
+
+restart_service() {
+    local service=$1
+    local name="${SERVICE_NAMES[$service]:-$service}"
+    echo -e "${YELLOW}↻${NC} Перезапускаю $name..."
+    sudo systemctl restart "$service"
+    sleep 2
+    if [ "$(get_service_status "$service")" = "active" ]; then
+        echo -e "${GREEN}✓${NC} $name перезапущен"
+        log_action "RESTARTED: $service"
+    else
+        echo -e "${RED}✗${NC} Ошибка перезапуска $name"
+        log_action "FAILED TO RESTART: $service"
+    fi
+}
+
+# Запуск всех сервисов
+start_all() {
+    echo -e "\n${CYAN}═══ ЗАПУСК ВСЕХ СЕРВИСОВ ═══${NC}\n"
+    log_action "=== STARTING ALL SERVICES ==="
+    for service in "${SERVICES[@]}"; do
+        start_service "$service"
+    done
+    echo ""
+    echo -e "${GREEN}✓ Все сервисы запущены!${NC}"
+    press_enter
+}
+
+# Остановка всех сервисов
+stop_all() {
+    echo -e "\n${CYAN}═══ ОСТАНОВКА ВСЕХ СЕРВИСОВ ═══${NC}\n"
+    log_action "=== STOPPING ALL SERVICES ==="
+    # Останавливаем в обратном порядке
+    for (( i=${#SERVICES[@]}-1; i>=0; i-- )); do
+        stop_service "${SERVICES[i]}"
+    done
+    echo ""
+    echo -e "${GREEN}✓ Все сервисы остановлены!${NC}"
+    press_enter
+}
+
+# Перезапуск всех сервисов
+restart_all() {
+    echo -e "\n${CYAN}═══ ПЕРЕЗАПУСК ВСЕХ СЕРВИСОВ ═══${NC}\n"
+    log_action "=== RESTARTING ALL SERVICES ==="
+    for service in "${SERVICES[@]}"; do
+        restart_service "$service"
+        if [ "$service" = "reticulum.service" ]; then
+            echo -e "${GRAY}⏳ Ожидаю инициализацию Reticulum...${NC}"
+            sleep 4
+        fi
+    done
+    echo ""
+    echo -e "${GREEN}✓ Все сервисы перезапущены!${NC}"
+    press_enter
+}
+
+# Анонс всех сервисов (быстрый рестарт 3 главных)
+announce_all() {
+    echo -e "\n${CYAN}═══ АНОНС ВСЕХ СЕРВИСОВ ═══${NC}\n"
+    log_action "=== ANNOUNCING ALL SERVICES ==="
+    for service in "${ANNOUNCE_SERVICES[@]}"; do
+        local name="${SERVICE_NAMES[$service]:-$service}"
+        echo -e "${PURPLE}📢${NC} Анонсирую $name..."
+        sudo systemctl restart "$service"
+        sleep 0.5
+        if [ "$(get_service_status "$service")" = "active" ]; then
+            echo -e "${GREEN}✓${NC} $name анонсирован"
+            log_action "ANNOUNCED: $service"
+        else
+            echo -e "${RED}✗${NC} Ошибка анонса $name"
+            log_action "FAILED TO ANNOUNCE: $service"
+        fi
+    done
+    echo ""
+    echo -e "${GREEN}✓ Все сервисы анонсированы!${NC}"
+    press_enter
+}
+
+# ══════════════════════════════════════════════════════════════════
+# МЕНЮ СТАТУСА
+# ══════════════════════════════════════════════════════════════════
+
+show_status() {
+    print_header
+    echo -e "${WHITE}${BOLD}  СТАТУС СЕРВИСОВ${NC}"
+    print_line
+    echo ""
+    
+    local active_count=0
+    local total_count=${#SERVICES[@]}
+    
+    for service in "${SERVICES[@]}"; do
+        print_service_status "$service"
+        if [ "$(get_service_status "$service")" = "active" ]; then
+            ((active_count++))
+        fi
+    done
+    
+    echo ""
+    print_line
+    
+    # Статус venv
+    if check_venv_active; then
+        echo -e "  ${GREEN}●${NC} Virtual Environment ${GREEN}[активен]${NC}"
+    else
+        echo -e "  ${YELLOW}●${NC} Virtual Environment ${YELLOW}[не активен]${NC}"
+    fi
+    
+    echo ""
+    echo -e "  ${CYAN}Работает: ${active_count}/${total_count} сервисов${NC}"
+    echo ""
+    press_enter
+}
+
+# ══════════════════════════════════════════════════════════════════
+# ПОДМЕНЮ: СЕРВИСЫ RETICULUM
+# ══════════════════════════════════════════════════════════════════
+
+menu_services() {
+    while true; do
+        print_header
+        echo -e "${WHITE}${BOLD}  📡 СЕРВИСЫ RETICULUM${NC}"
+        print_line
+        echo ""
+        
+        # Показываем статус каждого сервиса
+        for service in "${SERVICES[@]}"; do
+            print_service_status "$service"
+        done
+        
+        echo ""
+        print_line
+        echo -e "  ${LIGHT_CYAN}[1]${NC} ${LIGHT_CYAN}Reticulum Stack${NC}"
+        echo -e "  ${LIGHT_BLUE}[2]${NC} ${LIGHT_BLUE}NomadNet${NC}"
+        echo -e "  ${LIGHT_PURPLE}[3]${NC} ${LIGHT_PURPLE}SURGUT Group${NC}"
+        echo -e "  ${LIGHT_GREEN}[4]${NC} ${LIGHT_GREEN}SurgutBot86${NC}"
+        echo -e "  ${PINK}[5]${NC} ${PINK}messageboard${NC}"
+        echo -e "  ${CYAN}[6]${NC} ${CYAN}Управление группами${NC}  →"
+        print_line
+        echo -e "  ${GREEN}[a]${NC} ${GREEN}Запустить ВСЕ${NC}"
+        echo -e "  ${RED}[s]${NC} ${RED}Остановить ВСЕ${NC}"
+        echo -e "  ${YELLOW}[r]${NC} ${YELLOW}Перезапустить ВСЕ${NC}"
+        echo -e "  ${PURPLE}[n]${NC} ${PURPLE}Анонсировать ВСЕ${NC}"
+        print_line
+        echo -e "  ${GRAY}[0]${NC} ${GRAY}← Назад / Enter${NC}"
+        echo ""
+        
+        echo -ne "${CYAN}Выбор: ${NC}"
+        local choice=$(read_key)
+        echo "$choice"
+        
+        # Проверяем ESC
+        if [[ "$choice" == "ESC" ]]; then
+            return
+        fi
+        
+        # Конвертируем русскую раскладку
+        choice=$(convert_ru_to_en "$choice")
+        
+        case $choice in
+            1) menu_single_service "reticulum.service" ;;
+            2) menu_nomadnet ;;
+            3) menu_group ;;
+            4) menu_surgutbot ;;
+            5) menu_messageboard ;;
+            6) menu_all_groups ;;
+            a|A) start_all ;;
+            s|S) 
+                if verify_pin "остановить ВСЕ"; then
+                    stop_all
+                fi
+                ;;
+            r|R) restart_all ;;
+            n|N) announce_all ;;
+            0) return ;;
+            q|Q) echo -e "\n${CYAN}Скрипт завершён.${NC}\n"; exit 0 ;;
+            *) ;;
+        esac
+    done
+}
+
+# Меню для одного сервиса
+menu_single_service() {
+    local service=$1
+    local name="${SERVICE_NAMES[$service]:-$service}"
+    
+    while true; do
+        print_header
+        echo -e "${WHITE}${BOLD}  $name${NC}"
+        print_line
+        echo ""
+        print_service_status "$service"
+        echo ""
+        print_line
+        echo -e "  ${GREEN}[1]${NC} ▶ ${GREEN}Запустить${NC}"
+        echo -e "  ${RED}[2]${NC} ■ ${RED}Остановить${NC}"
+        echo -e "  ${YELLOW}[3]${NC} ↻ ${YELLOW}Перезапустить${NC}"
+        echo -e "  ${LIGHT_CYAN}[4]${NC} 📜 ${LIGHT_CYAN}Показать логи${NC}"
+        echo -e "  ${LIGHT_BLUE}[5]${NC} ℹ️  ${LIGHT_BLUE}Подробный статус${NC}"
+        
+        # Добавляем интерактивный режим для NomadNet
+        if [ "$service" = "nomadnet.service" ]; then
+            echo -e "  ${LIGHT_PURPLE}[6]${NC} 🖥️  ${LIGHT_PURPLE}Открыть интерактивно (TUI)${NC}"
+        fi
+        
+        print_line
+        echo -e "  ${GRAY}[0]${NC} ${GRAY}← Назад / Enter${NC}"
+        echo ""
+        
+        echo -ne "${CYAN}Выбор: ${NC}"
+        local choice=$(read_key)
+        echo "$choice"
+        
+        # Проверяем ESC
+        if [[ "$choice" == "ESC" ]]; then
+            return
+        fi
+        
+        choice=$(convert_ru_to_en "$choice")
+        
+        case $choice in
+            1) 
+                start_service "$service"
+                press_enter
+                ;;
+            2) 
+                if verify_pin "остановить $name"; then
+                    stop_service "$service"
+                    press_enter
+                fi
+                ;;
+            3) 
+                restart_service "$service"
+                press_enter
+                ;;
+            4)
+                echo ""
+                echo -e "${CYAN}═══ ЛОГИ: $name (Ctrl+C для выхода) ═══${NC}"
+                echo ""
+                sudo journalctl -u "$service" -f --no-pager -n 50
+                ;;
+            5)
+                echo ""
+                sudo systemctl status "$service"
+                press_enter
+                ;;
+            6)
+                # Интерактивный режим только для NomadNet
+                if [ "$service" = "nomadnet.service" ]; then
+                    launch_nomadnet_interactive
+                fi
+                ;;
+            0) return ;;
+            q|Q) echo -e "\n${CYAN}Скрипт завершён.${NC}\n"; exit 0 ;;
+            *) ;;
+        esac
+    done
+}
+
+# ══════════════════════════════════════════════════════════════════
+# ПОДМЕНЮ: NOMADNET
+# ══════════════════════════════════════════════════════════════════
+
+menu_nomadnet() {
+    local service="nomadnet.service"
+    local name="${SERVICE_NAMES[$service]}"
+    
+    while true; do
+        print_header
+        echo -e "${WHITE}${BOLD}  $name${NC}"
+        print_line
+        echo ""
+        print_service_status "$service"
+        echo ""
+        print_line
+        echo -e "  ${GREEN}[1]${NC} ▶ ${GREEN}Запустить${NC}"
+        echo -e "  ${RED}[2]${NC} ■ ${RED}Остановить${NC}"
+        echo -e "  ${YELLOW}[3]${NC} ↻ ${YELLOW}Перезапустить${NC}"
+        echo -e "  ${LIGHT_CYAN}[4]${NC} 📜 ${LIGHT_CYAN}Показать логи${NC}"
+        echo -e "  ${LIGHT_BLUE}[5]${NC} ℹ️  ${LIGHT_BLUE}Подробный статус${NC}"
+        echo -e "  ${LIGHT_PURPLE}[6]${NC} 🖥️  ${LIGHT_PURPLE}Открыть интерактивно (TUI)${NC}"
+        echo -e "  ${PINK}[7]${NC} 📊 ${PINK}Статистика ноды${NC}"
+        print_line
+        echo -e "  ${GRAY}[0]${NC} ${GRAY}← Назад / Enter${NC}"
+        echo ""
+        
+        echo -ne "${CYAN}Выбор: ${NC}"
+        local choice=$(read_key)
+        echo "$choice"
+        
+        # Проверяем ESC
+        if [[ "$choice" == "ESC" ]]; then
+            return
+        fi
+        
+        choice=$(convert_ru_to_en "$choice")
+        
+        case $choice in
+            1) start_service "$service"; press_enter ;;
+            2) 
+                if verify_pin "остановить NomadNet"; then
+                    stop_service "$service"
+                    press_enter
+                fi
+                ;;
+            3) restart_service "$service"; press_enter ;;
+            4)
+                echo ""
+                echo -e "${CYAN}═══ ЛОГИ: $name (Ctrl+C для выхода) ═══${NC}"
+                sudo journalctl -u "$service" -f --no-pager -n 50
+                ;;
+            5)
+                echo ""
+                sudo systemctl status "$service"
+                press_enter
+                ;;
+            6) launch_nomadnet_interactive ;;
+            7) show_node_stats ;;
+            0) return ;;
+            q|Q) echo -e "\n${CYAN}Скрипт завершён.${NC}\n"; exit 0 ;;
+            *) ;;
+        esac
+    done
+}
+
+# Статистика ноды
+show_node_stats() {
+    echo ""
+    echo -e "${CYAN}═══ СТАТИСТИКА НОДЫ ═══${NC}"
+    echo ""
+    
+    # Парсим peersettings через Python (msgpack формат)
+    "$VENV_PATH/bin/python3" -c "
+import RNS.vendor.umsgpack as msgpack
+import os
+from datetime import datetime
+
+peers_file = '/root/.nomadnetwork/storage/peersettings'
+if os.path.exists(peers_file):
+    with open(peers_file, 'rb') as f:
+        data = msgpack.unpack(f)
+    
+    print(f'  📛 Имя: ${WHITE}{data.get(\"display_name\", \"N/A\")}${NC}')
+    print(f'  🔗 Подключений: ${WHITE}{data.get(\"node_connects\", 0)}${NC}')
+    print(f'  📄 Запросов страниц: ${WHITE}{data.get(\"served_page_requests\", 0)}${NC}')
+    print(f'  📁 Запросов файлов: ${WHITE}{data.get(\"served_file_requests\", 0)}${NC}')
+    
+    # Последний анонс
+    last_announce = data.get('last_announce', 0)
+    if last_announce:
+        try:
+            dt = datetime.fromtimestamp(last_announce)
+            print(f'  📢 Последний анонс: ${WHITE}{dt.strftime(\"%Y-%m-%d %H:%M:%S\")}${NC}')
+        except:
+            pass
+" 2>/dev/null
+    
+    echo ""
+    
+    # Счётчики посещений страниц
+    local counter_dir="/root/.nomadnetwork/storage/counters"
+    if [ -d "$counter_dir" ]; then
+        echo -e "  ${WHITE}Посещения страниц:${NC}"
+        local index_count=$(cat "$counter_dir/index.txt" 2>/dev/null || echo "0")
+        local board_count=$(cat "$counter_dir/board.txt" 2>/dev/null || echo "0")
+        local guide_count=$(cat "$counter_dir/guide.txt" 2>/dev/null || echo "0")
+        echo -e "    📄 index.mu:  ${WHITE}$index_count${NC}"
+        echo -e "    📋 board.mu:  ${WHITE}$board_count${NC}"
+        echo -e "    📖 guide.mu:  ${WHITE}$guide_count${NC}"
+        local total=$((index_count + board_count + guide_count))
+        echo -e "    ─────────────────"
+        echo -e "    📊 Всего:     ${WHITE}$total${NC}"
+        echo ""
+    fi
+    
+    # LXMF Storage
+    local lxmf_dir="/root/.nomadnetwork/storage/lxmf"
+    if [ -d "$lxmf_dir" ]; then
+        local storage_size=$(du -sh "$lxmf_dir" 2>/dev/null | cut -f1)
+        echo -e "  💾 LXMF Storage: ${WHITE}$storage_size${NC}"
+        
+        local msg_count=$(ls -1 "$lxmf_dir/messagestore" 2>/dev/null | wc -l)
+        echo -e "  📨 Сообщений в хранилище: ${WHITE}$msg_count${NC}"
+    fi
+    
+    echo ""
+    
+    # Ресурсы
+    local pid=$(systemctl show -p MainPID nomadnet.service 2>/dev/null | cut -d= -f2)
+    if [ "$pid" != "0" ] && [ -n "$pid" ]; then
+        echo -e "  ${GRAY}Ресурсы (PID: $pid):${NC}"
+        ps -p "$pid" -o %cpu,%mem,rss --no-headers 2>/dev/null | \
+            awk '{printf "  CPU: %s%%  MEM: %s%%  RAM: %.1f MB\n", $1, $2, $3/1024}'
+    fi
+    
+    press_enter
+}
+
+# ══════════════════════════════════════════════════════════════════
+# ПОДМЕНЮ: SURGUT GROUP
+# ══════════════════════════════════════════════════════════════════
+
+# Редактирование данных группы (название, описание, участники)
+edit_group_config() {
+    local config_file="/root/.config/lxmf_distribution_group_extended/data.cfg"
+    
+    echo ""
+    echo -e "${CYAN}═══ ДАННЫЕ ГРУППЫ ═══${NC}"
+    echo ""
+    
+    if [ -f "$config_file" ]; then
+        local lines=$(wc -l < "$config_file")
+        local size=$(du -h "$config_file" | cut -f1)
+        echo -e "  📄 Файл: ${WHITE}$config_file${NC}"
+        echo -e "  📊 Строк: ${WHITE}$lines${NC}  Размер: ${WHITE}$size${NC}"
+        echo ""
+    else
+        echo -e "  ${RED}✗ Файл не найден!${NC}"
+        press_enter
+        return
+    fi
+    
+    echo -e "${YELLOW}⚠ Здесь: название, описание, участники группы${NC}"
+    echo -e "${GRAY}Открываю nano для редактирования...${NC}"
+    echo -e "${GRAY}(Ctrl+O сохранить, Ctrl+X выход)${NC}"
+    sleep 1
+    
+    sudo nano "$config_file"
+    
+    echo ""
+    echo -e "${GREEN}✓ Редактирование завершено${NC}"
+    echo -e "${YELLOW}Не забудь перезапустить группу для применения изменений!${NC}"
+    press_enter
+}
+
+# Редактирование настроек группы (display_name, интервал анонса)
+edit_group_settings() {
+    local config_file="/root/.config/lxmf_distribution_group_extended/config.cfg.owr"
+    
+    echo ""
+    echo -e "${CYAN}═══ НАСТРОЙКИ ГРУППЫ (config.cfg.owr) ═══${NC}"
+    echo ""
+    
+    if [ -f "$config_file" ]; then
+        local lines=$(wc -l < "$config_file")
+        local size=$(du -h "$config_file" | cut -f1)
+        echo -e "  📄 Файл: ${WHITE}$config_file${NC}"
+        echo -e "  📊 Строк: ${WHITE}$lines${NC}  Размер: ${WHITE}$size${NC}"
+        echo ""
+        
+        # Показываем текущие важные настройки
+        local display_name=$(grep "^display_name" "$config_file" | head -1 | cut -d'=' -f2 | tr -d ' ')
+        local announce_interval=$(grep "^announce_interval" "$config_file" | cut -d'=' -f2 | tr -d ' ')
+        echo -e "  📛 Название: ${WHITE}$display_name${NC}"
+        echo -e "  📢 Интервал анонса: ${WHITE}${announce_interval} мин${NC}"
+        echo ""
+    else
+        echo -e "  ${RED}✗ Файл не найден!${NC}"
+        press_enter
+        return
+    fi
+    
+    echo -e "${YELLOW}⚠ Здесь: display_name, интервал анонса, propagation node${NC}"
+    echo -e "${GRAY}Открываю nano для редактирования...${NC}"
+    echo -e "${GRAY}(Ctrl+O сохранить, Ctrl+X выход)${NC}"
+    sleep 1
+    
+    sudo nano "$config_file"
+    
+    echo ""
+    echo -e "${GREEN}✓ Редактирование завершено${NC}"
+    echo -e "${YELLOW}Не забудь перезапустить группу для применения изменений!${NC}"
+    press_enter
+}
+
+# Редактирование основного конфига SURGUT GROUP (config.cfg)
+edit_surgut_config_cfg() {
+    local config_file="/root/.config/lxmf_distribution_group_extended/config.cfg"
+    
+    echo ""
+    echo -e "${CYAN}═══ ОСНОВНОЙ КОНФИГ (config.cfg) ═══${NC}"
+    echo ""
+    
+    if [ -f "$config_file" ]; then
+        local lines=$(wc -l < "$config_file")
+        local size=$(du -h "$config_file" | cut -f1)
+        echo -e "  📄 Файл: ${WHITE}$config_file${NC}"
+        echo -e "  📊 Строк: ${WHITE}$lines${NC}  Размер: ${WHITE}$size${NC}"
+        echo ""
+        
+        # Показываем текущие важные настройки
+        local lng=$(grep "^lng" "$config_file" | head -1 | cut -d'=' -f2 | tr -d ' ')
+        echo -e "  🌐 Язык: ${WHITE}$lng${NC}"
+        echo ""
+    else
+        echo -e "  ${RED}✗ Файл не найден!${NC}"
+        press_enter
+        return
+    fi
+    
+    echo -e "${YELLOW}⚠ Это основной конфиг с сообщениями и настройками${NC}"
+    echo -e "${GRAY}Открываю nano для редактирования...${NC}"
+    echo -e "${GRAY}(Ctrl+O сохранить, Ctrl+X выход)${NC}"
+    sleep 1
+    
+    sudo nano "$config_file"
+    
+    echo ""
+    echo -e "${GREEN}✓ Редактирование завершено${NC}"
+    echo -e "${YELLOW}Не забудь перезапустить группу для применения изменений!${NC}"
+    press_enter
+}
+
+menu_group() {
+    local service="surgut_group.service"
+    local name="${SERVICE_NAMES[$service]}"
+    local config_path="/root/.config/lxmf_distribution_group_extended"
+    
+    while true; do
+        print_header
+        echo -e "${WHITE}${BOLD}  $name${NC}"
+        print_line
+        echo ""
+        print_service_status "$service"
+        echo ""
+        print_line
+        echo -e "  ${GREEN}[1]${NC} ▶ ${GREEN}Запустить${NC}"
+        echo -e "  ${RED}[2]${NC} ■ ${RED}Остановить${NC}"
+        echo -e "  ${YELLOW}[3]${NC} ↻ ${YELLOW}Перезапустить${NC}"
+        echo -e "  ${LIGHT_CYAN}[4]${NC} 📜 ${LIGHT_CYAN}Показать логи${NC}"
+        echo -e "  ${LIGHT_BLUE}[5]${NC} ℹ️  ${LIGHT_BLUE}Подробный статус${NC}"
+        echo -e "  ${LIGHT_PURPLE}[6]${NC} 👥 ${LIGHT_PURPLE}Участники группы${NC}"
+        echo -e "  ${PINK}[7]${NC} 📌 ${PINK}Закреплённое сообщение${NC}"
+        echo -e "  ${ORANGE}[8]${NC} 📊 ${ORANGE}Статистика группы${NC}"
+        echo -e "  ${LIGHT_GREEN}[9]${NC} ✉️  ${LIGHT_GREEN}Отправить сообщение${NC}"
+        print_line
+        echo -e "  ${LIGHT_RED}[d]${NC} 📝 ${LIGHT_RED}Редактировать data.cfg${NC}"
+        echo -e "  ${LIGHT_PURPLE}[c]${NC} ⚙️  ${LIGHT_PURPLE}Редактировать config.cfg${NC}"
+        echo -e "  ${YELLOW}[o]${NC} 📋 ${YELLOW}Редактировать config.cfg.owr${NC}"
+        print_line
+        echo -e "  ${GRAY}[0]${NC} ${GRAY}← Назад / Enter${NC}"
+        echo ""
+        
+        echo -ne "${CYAN}Выбор: ${NC}"
+        local choice=$(read_key)
+        echo "$choice"
+        
+        # Проверяем ESC
+        if [[ "$choice" == "ESC" ]]; then
+            return
+        fi
+        
+        choice=$(convert_ru_to_en "$choice")
+        
+        case $choice in
+            1) start_service "$service"; press_enter ;;
+            2) 
+                if verify_pin "остановить группу"; then
+                    stop_service "$service"
+                    press_enter
+                fi
+                ;;
+            3) restart_service "$service"; press_enter ;;
+            4)
+                echo ""
+                echo -e "${CYAN}═══ ЛОГИ: $name (Ctrl+C для выхода) ═══${NC}"
+                sudo journalctl -u "$service" -f --no-pager -n 50
+                ;;
+            5)
+                echo ""
+                sudo systemctl status "$service"
+                press_enter
+                ;;
+            6) show_group_members ;;
+            7) show_group_pin ;;
+            8) show_group_stats ;;
+            9) 
+                if verify_pin "отправить сообщение"; then
+                    send_group_message
+                fi
+                ;;
+            d|D)
+                if verify_pin "редактировать data.cfg"; then
+                    edit_group_config
+                fi
+                ;;
+            c|C)
+                if verify_pin "редактировать config.cfg"; then
+                    edit_surgut_config_cfg
+                fi
+                ;;
+            o|O)
+                if verify_pin "редактировать config.cfg.owr"; then
+                    edit_group_settings
+                fi
+                ;;
+            0) return ;;
+            q|Q) echo -e "\n${CYAN}Скрипт завершён.${NC}\n"; exit 0 ;;
+            *) ;;
+        esac
+    done
+}
+
+# Отправка сообщения в группу
+send_group_message() {
+    while true; do
+        echo ""
+        echo -e "${CYAN}═══ ОТПРАВКА СООБЩЕНИЯ В ГРУППУ ═══${NC}"
+        echo ""
+        echo -e "${GRAY}Сообщение будет отправлено всем участникам от имени группы${NC}"
+        echo ""
+        
+        echo -ne "${WHITE}Введите сообщение (или Enter для выхода): ${NC}"
+        read -e -r message
+        
+        if [ -z "$message" ]; then
+            return
+        fi
+        
+        # Показываем сообщение для подтверждения
+        echo ""
+        echo -e "${WHITE}Сообщение:${NC} $message"
+        echo ""
+        echo -ne "${YELLOW}Отправить? (Enter = да, n = нет): ${NC}"
+        read -r confirm
+        
+        # Пустой ввод (Enter) = да, n/N/т/Т = нет
+        if [[ "$confirm" =~ ^[NnТт]$ ]]; then
+            echo -e "${YELLOW}Отменено${NC}"
+            continue
+        fi
+        
+        # Сохраняем сообщение во временный файл в UTF-8
+        printf '%s' "$message" | iconv -t UTF-8 > /tmp/group_message.txt 2>/dev/null || echo "$message" > /tmp/group_message.txt
+        
+        echo ""
+        echo -e "${YELLOW}Останавливаю группу...${NC}"
+        systemctl stop surgut_group.service
+        sleep 1
+        
+        echo -e "${YELLOW}Отправляю...${NC}"
+        
+        # Отправляем сообщение
+        "$VENV_PATH/bin/python3" /tmp/send_group_msg.py
+        
+        echo -e "${YELLOW}Запускаю группу...${NC}"
+        systemctl start surgut_group.service
+        
+        # Удаляем временный файл
+        rm -f /tmp/group_message.txt 2>/dev/null
+        
+        echo ""
+        echo -e "${GREEN}✓ Готово!${NC}"
+        echo ""
+        echo -ne "${GRAY}Отправить ещё? (y = да, Enter = выход): ${NC}"
+        read -r again
+        
+        if [[ ! "$again" =~ ^[YyДдНн]$ ]]; then
+            return
+        fi
+    done
+}
+
+# Создаём Python скрипт для отправки (вызывается из send_group_message)
+create_send_script() {
+    cat > /tmp/send_group_msg.py << 'PYEOF'
+# -*- coding: utf-8 -*-
+import RNS
+import LXMF
+import time
+import configparser
+
+# Пути
+GROUP_IDENTITY = "/root/.config/lxmf_distribution_group_extended/identity"
+GROUP_DATA = "/root/.config/lxmf_distribution_group_extended/data.cfg"
+GROUP_STORAGE = "/root/.config/lxmf_distribution_group_extended"
+MESSAGE_FILE = "/tmp/group_message.txt"
+
+# Читаем сообщение (пробуем разные кодировки)
+message = None
+for encoding in ['utf-8', 'cp1251', 'latin-1']:
+    try:
+        with open(MESSAGE_FILE, 'r', encoding=encoding) as f:
+            message = f.read().strip()
+        break
+    except:
+        continue
+
+if not message:
+    print("Ошибка: не удалось прочитать сообщение")
+    exit(1)
+
+print(f"Сообщение: {message}")
+
+# Инициализация Reticulum
+reticulum = RNS.Reticulum()
+
+# Загружаем identity группы
+identity = RNS.Identity.from_file(GROUP_IDENTITY)
+
+# Создаём LXMF Router
+router = LXMF.LXMRouter(identity=identity, storagepath=GROUP_STORAGE)
+group_dest = router.register_delivery_identity(identity, display_name="")
+
+# Читаем участников группы
+config = configparser.ConfigParser()
+config.read(GROUP_DATA)
+
+recipients = []
+
+# Собираем админов и пользователей
+for section in ['admin', 'user']:
+    if section in config.sections():
+        for hash_addr in config[section]:
+            recipients.append(hash_addr)
+
+print(f"Получателей: {len(recipients)}")
+
+sent = 0
+failed = 0
+
+for dest_hash in recipients:
+    try:
+        dest_hash_bytes = bytes.fromhex(dest_hash)
+        dest_identity = RNS.Identity.recall(dest_hash_bytes)
+        
+        if dest_identity:
+            dest = RNS.Destination(
+                dest_identity,
+                RNS.Destination.OUT,
+                RNS.Destination.SINGLE,
+                "lxmf", "delivery"
+            )
+            
+            lxm = LXMF.LXMessage(dest, group_dest, message, title="", desired_method=LXMF.LXMessage.DIRECT)
+            lxm.try_propagation_on_fail = True
+            router.handle_outbound(lxm)
+            sent += 1
+            print(f"✓ {dest_hash[:8]}...")
+        else:
+            RNS.Transport.request_path(dest_hash_bytes)
+            failed += 1
+            print(f"? {dest_hash[:8]}... (путь запрошен)")
+    except Exception as e:
+        failed += 1
+        print(f"✗ {dest_hash[:8]}...: {e}")
+
+# Ждём отправку
+time.sleep(10)
+    
+print(f"Отправлено: {sent}")
+PYEOF
+}
+
+# Создаём скрипт при загрузке
+create_send_script
+
+# Участники группы
+show_group_members() {
+    echo ""
+    echo -e "${CYAN}═══ УЧАСТНИКИ ГРУППЫ ═══${NC}"
+    echo ""
+    
+    local data_file="/root/.config/lxmf_distribution_group_extended/data.cfg"
+    
+    if [ -f "$data_file" ]; then
+        # Парсим через Python — надёжнее
+        sudo "$VENV_PATH/bin/python3" << 'PYEOF'
+import configparser
+import os
+
+data_file = "/root/.config/lxmf_distribution_group_extended/data.cfg"
+config = configparser.ConfigParser()
+config.read(data_file)
+
+# Админы
+if 'admin' in config.sections():
+    admins = dict(config['admin'])
+    if admins:
+        print("  \033[1;31m👑 АДМИНЫ:\033[0m")
+        for hash_addr, nick in admins.items():
+            nick = nick.strip() if nick.strip() else hash_addr[:8]
+            print(f"     \033[1;37m{nick}\033[0m \033[0;90m[{hash_addr}]\033[0m")
+        print()
+
+# Пользователи
+if 'user' in config.sections():
+    users = dict(config['user'])
+    if users:
+        print("  \033[1;32m👤 ПОЛЬЗОВАТЕЛИ:\033[0m")
+        for hash_addr, nick in users.items():
+            nick = nick.strip() if nick.strip() else hash_addr[:8]
+            print(f"     \033[1;37m{nick}\033[0m \033[0;90m[{hash_addr}]\033[0m")
+        print()
+
+# Заблокированные
+if 'block_user' in config.sections():
+    blocked = dict(config['block_user'])
+    if blocked:
+        print("  \033[0;31m🚫 ЗАБЛОКИРОВАНЫ:\033[0m")
+        for hash_addr, nick in blocked.items():
+            nick = nick.strip() if nick.strip() else hash_addr[:8]
+            print(f"     \033[0;90m{nick} [{hash_addr}]\033[0m")
+PYEOF
+    else
+        echo -e "  ${RED}Файл данных не найден${NC}"
+    fi
+    
+    press_enter
+}
+
+# Закреплённое сообщение
+show_group_pin() {
+    echo ""
+    echo -e "${CYAN}═══ ЗАКРЕПЛЁННОЕ СООБЩЕНИЕ ═══${NC}"
+    echo ""
+    
+    local data_file="/root/.config/lxmf_distribution_group_extended/data.cfg"
+    
+    if [ -f "$data_file" ]; then
+        local in_pin=0
+        while IFS= read -r line; do
+            if [[ "$line" == "[pin]" ]]; then
+                in_pin=1
+                continue
+            fi
+            if [[ "$line" == "["* ]] && [ $in_pin -eq 1 ]; then
+                break
+            fi
+            if [ $in_pin -eq 1 ] && [ -n "$line" ]; then
+                echo -e "  ${WHITE}$line${NC}"
+            fi
+        done < "$data_file"
+    else
+        echo -e "  ${RED}Файл данных не найден${NC}"
+    fi
+    
+    press_enter
+}
+
+# Статистика группы
+show_group_stats() {
+    echo ""
+    echo -e "${CYAN}═══ СТАТИСТИКА ГРУППЫ ═══${NC}"
+    echo ""
+    
+    local data_file="/root/.config/lxmf_distribution_group_extended/data.cfg"
+    
+    # Парсим через Python
+    sudo "$VENV_PATH/bin/python3" << 'PYEOF'
+import configparser
+
+data_file = "/root/.config/lxmf_distribution_group_extended/data.cfg"
+config = configparser.ConfigParser()
+config.read(data_file)
+
+admins = len(dict(config['admin'])) if 'admin' in config.sections() else 0
+users = len(dict(config['user'])) if 'user' in config.sections() else 0
+blocked = len(dict(config['block_user'])) if 'block_user' in config.sections() else 0
+
+print(f"  👑 Админов: \033[1;37m{admins}\033[0m")
+print(f"  👤 Пользователей: \033[1;37m{users}\033[0m")
+print(f"  🚫 Заблокировано: \033[1;37m{blocked}\033[0m")
+print(f"  📊 Всего участников: \033[1;37m{admins + users}\033[0m")
+PYEOF
+    
+    echo ""
+    
+    local stat_file="/root/.config/lxmf_distribution_group_extended/statistic.cfg"
+    if [ -f "$stat_file" ]; then
+        sudo "$VENV_PATH/bin/python3" << 'PYEOF'
+import configparser
+
+stat_file = "/root/.config/lxmf_distribution_group_extended/statistic.cfg"
+config = configparser.ConfigParser()
+config.read(stat_file)
+
+if 'interface_received_3' in config.sections():
+    today = config['interface_received_3'].get('day_value', '0')
+    total = config['interface_received_3'].get('all_value', '0')
+    print(f"  📨 Сообщений сегодня: \033[1;37m{today}\033[0m")
+    print(f"  📬 Сообщений всего: \033[1;37m{total}\033[0m")
+PYEOF
+    fi
+    
+    echo ""
+    
+    # Ресурсы
+    local pid=$(systemctl show -p MainPID surgut_group.service 2>/dev/null | cut -d= -f2)
+    if [ "$pid" != "0" ] && [ -n "$pid" ]; then
+        echo -e "  ${GRAY}Ресурсы (PID: $pid):${NC}"
+        ps -p "$pid" -o %cpu,%mem,rss --no-headers 2>/dev/null | \
+            awk '{printf "  CPU: %s%%  MEM: %s%%  RAM: %.1f MB\n", $1, $2, $3/1024}'
+    fi
+    
+    press_enter
+}
+
+# ══════════════════════════════════════════════════════════════════
+# ИНТЕРАКТИВНЫЙ ЗАПУСК NOMADNET
+# ══════════════════════════════════════════════════════════════════
+
+launch_nomadnet_interactive() {
+    echo ""
+    
+    # Проверяем, запущен ли демон
+    if [ "$(get_service_status "nomadnet.service")" = "active" ]; then
+        echo -e "${YELLOW}■${NC} Останавливаю демон для интерактивного режима..."
+        sudo systemctl stop nomadnet.service
+        sleep 1
+    fi
+    
+    echo ""
+    echo -e "${CYAN}═══ ЗАПУСК NOMADNET ИНТЕРАКТИВНО ═══${NC}"
+    echo -e "${GRAY}Для выхода нажми Ctrl+C или Q внутри NomadNet${NC}"
+    echo ""
+    sleep 1
+    
+    # Запускаем интерактивно
+    "$VENV_PATH/bin/nomadnet"
+    
+    # После выхода автоматически запускаем демон
+    echo ""
+    echo -e "${YELLOW}▶${NC} Запускаю NomadNet демон..."
+    start_service "nomadnet.service"
+    press_enter
+}
+
+# ══════════════════════════════════════════════════════════════════
+# ПОДМЕНЮ: SURGUTBOT86
+# ══════════════════════════════════════════════════════════════════
+
+# Редактирование базы знаний бота
+menu_knowledge_base() {
+    local kb_dir="/home/user/ollama-bot/knowledge"
+    local topics_file="$kb_dir/topics.json"
+    
+    while true; do
+        print_header
+        echo -e "${WHITE}${BOLD}  📚 БАЗА ЗНАНИЙ${NC}"
+        print_line
+        echo ""
+        
+        # Показываем файлы базы знаний
+        echo -e "${WHITE}Файлы тем:${NC}"
+        local files=()
+        local i=1
+        for f in "$kb_dir"/*.txt; do
+            if [ -f "$f" ]; then
+                local fname=$(basename "$f")
+                local fsize=$(du -h "$f" 2>/dev/null | cut -f1)
+                local flines=$(wc -l < "$f" 2>/dev/null)
+                files+=("$f")
+                echo -e "  ${LIGHT_CYAN}[$i]${NC} $fname ${GRAY}($flines строк, $fsize)${NC}"
+                ((i++))
+            fi
+        done
+        
+        if [ ${#files[@]} -eq 0 ]; then
+            echo -e "  ${YELLOW}Нет файлов тем${NC}"
+        fi
+        
+        echo ""
+        print_line
+        echo -e "  ${LIGHT_GREEN}[+]${NC} ➕ ${LIGHT_GREEN}Добавить новую тему${NC}"
+        echo -e "  ${LIGHT_PURPLE}[k]${NC} 🔑 ${LIGHT_PURPLE}Ключевые слова (topics.json)${NC}"
+        echo -e "  ${LIGHT_RED}[d]${NC} 🗑️  ${LIGHT_RED}Удалить тему${NC}"
+        print_line
+        echo -e "  ${GRAY}[ESC/0]${NC} ${GRAY}← Назад${NC}"
+        echo ""
+        
+        echo -ne "${CYAN}Выбор: ${NC}"
+        local choice=$(read_key)
+        echo "$choice"
+        
+        if [[ "$choice" == "ESC" ]] || [[ "$choice" == "0" ]]; then
+            return
+        fi
+        
+        choice=$(convert_ru_to_en "$choice")
+        
+        case $choice in
+            +)
+                echo ""
+                echo -e "${GRAY}(Enter или 0 = отмена)${NC}"
+                echo -ne "${CYAN}Имя файла (без .txt): ${NC}"
+                read -r newname
+                if [ -z "$newname" ] || [ "$newname" == "0" ]; then
+                    echo -e "${GRAY}Отменено${NC}"
+                    sleep 1
+                    continue
+                fi
+                local newfile="$kb_dir/${newname}.txt"
+                echo "=== $(echo "$newname" | tr '[:lower:]' '[:upper:]') ===" > "$newfile"
+                echo "" >> "$newfile"
+                sudo nano "$newfile"
+                echo -e "${GREEN}✓ Файл создан: ${newname}.txt${NC}"
+                echo -e "${YELLOW}⚠ Не забудь добавить ключевые слова в topics.json!${NC}"
+                sleep 2
+                ;;
+            k|K)
+                echo ""
+                echo -e "${CYAN}═══ КЛЮЧЕВЫЕ СЛОВА ═══${NC}"
+                echo ""
+                if [ -f "$topics_file" ]; then
+                    cat "$topics_file" | python3 -m json.tool 2>/dev/null || cat "$topics_file"
+                else
+                    echo -e "${YELLOW}Файл topics.json не найден${NC}"
+                fi
+                echo ""
+                echo -ne "${CYAN}Редактировать? (y/n): ${NC}"
+                read -r edit_confirm
+                if [[ "$edit_confirm" =~ ^[yYдД]$ ]]; then
+                    sudo nano "$topics_file"
+                    echo -e "${GREEN}✓ Сохранено${NC}"
+                fi
+                sleep 1
+                ;;
+            d|D)
+                echo ""
+                echo -ne "${RED}Номер файла для удаления (0=отмена): ${NC}"
+                read -r del_num
+                if [[ "$del_num" =~ ^[0-9]+$ ]] && [ "$del_num" -ge 1 ] && [ "$del_num" -le "${#files[@]}" ]; then
+                    local del_file="${files[$((del_num-1))]}"
+                    local del_name=$(basename "$del_file")
+                    echo -ne "${RED}Удалить $del_name? (y/n): ${NC}"
+                    read -r confirm
+                    if [[ "$confirm" =~ ^[yYдД]$ ]]; then
+                        rm -f "$del_file"
+                        echo -e "${GREEN}✓ Удалено${NC}"
+                        echo -e "${YELLOW}⚠ Не забудь убрать из topics.json!${NC}"
+                        sleep 2
+                    fi
+                fi
+                ;;
+            *)
+                # Редактирование выбранного файла
+                if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#files[@]}" ]; then
+                    local selected="${files[$((choice-1))]}"
+                    sudo nano "$selected"
+                    echo -e "${GREEN}✓ Сохранено${NC}"
+                    sleep 1
+                fi
+                ;;
+        esac
+    done
+}
+
+# Редактирование кода бота (промпт и логика AI)
+edit_bot_code() {
+    local bot_file="/home/user/ollama-bot/cogs/ai.py"
+    
+    echo ""
+    echo -e "${CYAN}═══ ПРОМПТ И ЛОГИКА БОТА ═══${NC}"
+    echo ""
+    
+    if [ -f "$bot_file" ]; then
+        local lines=$(wc -l < "$bot_file")
+        local size=$(du -h "$bot_file" | cut -f1)
+        echo -e "  📄 Файл: ${WHITE}$bot_file${NC}"
+        echo -e "  📊 Строк: ${WHITE}$lines${NC}  Размер: ${WHITE}$size${NC}"
+        echo ""
+    else
+        echo -e "  ${RED}✗ Файл не найден!${NC}"
+        press_enter
+        return
+    fi
+    
+    echo -e "${YELLOW}⚠ Внимание: изменение кода может сломать бота!${NC}"
+    echo -e "${GRAY}Открываю nano для редактирования...${NC}"
+    echo -e "${GRAY}(Ctrl+O сохранить, Ctrl+X выход)${NC}"
+    sleep 1
+    
+    sudo nano "$bot_file"
+    
+    echo ""
+    echo -e "${GREEN}✓ Редактирование завершено${NC}"
+    echo -e "${YELLOW}Не забудь перезапустить бота для применения изменений!${NC}"
+    press_enter
+}
+
+# Редактирование настроек бота (.env)
+edit_bot_settings() {
+    local env_file="/home/user/ollama-bot/.env"
+    
+    echo ""
+    echo -e "${CYAN}═══ НАСТРОЙКИ БОТА (.env) ═══${NC}"
+    echo ""
+    
+    if [ -f "$env_file" ]; then
+        echo -e "${WHITE}Текущие настройки:${NC}"
+        echo ""
+        while IFS='=' read -r key value; do
+            [[ -z "$key" || "$key" =~ ^# ]] && continue
+            case "$key" in
+                BOT_NAME) echo -e "  📛 Имя бота: ${WHITE}$value${NC}" ;;
+                ADMIN_HASHES) echo -e "  👑 Админ: ${WHITE}${value:0:16}...${NC}" ;;
+                OLLAMA_MODEL) echo -e "  🤖 Модель: ${WHITE}$value${NC}" ;;
+                MAX_HISTORY) echo -e "  💾 Память: ${WHITE}$value сообщений${NC}" ;;
+                ANNOUNCE_INTERVAL) echo -e "  📢 Анонс: ${WHITE}$((value/60)) мин${NC}" ;;
+                RATE_LIMIT) echo -e "  ⏱️ Лимит: ${WHITE}$value сообщ/мин${NC}" ;;
+                COOLDOWN) echo -e "  ⏳ Кулдаун: ${WHITE}$value сек${NC}" ;;
+                PROPAGATION_NODE) echo -e "  📡 Propagation: ${WHITE}${value:0:16}...${NC}" ;;
+            esac
+        done < "$env_file"
+        echo ""
+    else
+        echo -e "  ${RED}✗ Файл не найден!${NC}"
+        press_enter
+        return
+    fi
+    
+    echo -e "${GRAY}Открываю nano для редактирования...${NC}"
+    echo -e "${GRAY}(Ctrl+O сохранить, Ctrl+X выход)${NC}"
+    sleep 1
+    
+    sudo nano "$env_file"
+    
+    echo ""
+    echo -e "${GREEN}✓ Редактирование завершено${NC}"
+    echo -e "${YELLOW}Не забудь перезапустить бота для применения изменений!${NC}"
+    press_enter
+}
+
+# ══════════════════════════════════════════════════════════════════
+# УПРАВЛЕНИЕ ДОВЕРЕННЫМИ ПОЛЬЗОВАТЕЛЯМИ
+# ══════════════════════════════════════════════════════════════════
+
+# Меню логов сообщений бота (УЛУЧШЕННАЯ ВЕРСИЯ)
+menu_bot_logs() {
+    local logs_dir="/home/user/ollama-bot/logs"
+    local msg_log="$logs_dir/messages.log"
+    
+    while true; do
+        print_header
+        echo -e "${WHITE}${BOLD}  📋 ЛОГИ СООБЩЕНИЙ${NC}"
+        print_line
+        echo ""
+        
+        # Показываем размеры логов
+        if [ -d "$logs_dir" ]; then
+            echo -e "${WHITE}Файлы логов:${NC}"
+            if [ -f "$logs_dir/admin.log" ]; then
+                local admin_size=$(du -h "$logs_dir/admin.log" 2>/dev/null | cut -f1)
+                local admin_lines=$(wc -l < "$logs_dir/admin.log" 2>/dev/null || echo "0")
+                echo -e "  📄 admin.log:    ${WHITE}$admin_lines строк${NC} ($admin_size)"
+            else
+                echo -e "  📄 admin.log:    ${GRAY}не создан${NC}"
+            fi
+            if [ -f "$msg_log" ]; then
+                local msg_size=$(du -h "$msg_log" 2>/dev/null | cut -f1)
+                local msg_lines=$(wc -l < "$msg_log" 2>/dev/null || echo "0")
+                local unique_users=$(cut -d'|' -f3 "$msg_log" 2>/dev/null | tr -d ' ' | sort -u | wc -l)
+                echo -e "  📄 messages.log: ${WHITE}$msg_lines строк${NC} ($msg_size)"
+                echo -e "  👥 Уникальных пользователей: ${WHITE}$unique_users${NC}"
+            else
+                echo -e "  📄 messages.log: ${GRAY}не создан${NC}"
+            fi
+            echo ""
+            echo -e "${GRAY}Хранение: 19 дней, затем автоочистка${NC}"
+        else
+            echo -e "  ${YELLOW}Директория логов не создана${NC}"
+            echo -e "  ${GRAY}Логи появятся после первого сообщения боту${NC}"
+        fi
+        
+        echo ""
+        print_line
+        echo -e "  ${LIGHT_CYAN}[1]${NC} 👤 ${LIGHT_CYAN}Логи админа (мои)${NC}"
+        echo -e "  ${LIGHT_GREEN}[2]${NC} 👥 ${LIGHT_GREEN}Список пользователей${NC}"
+        echo -e "  ${LIGHT_PURPLE}[3]${NC} 🔍 ${LIGHT_PURPLE}Поиск по нику${NC}"
+        echo -e "  ${LIGHT_BLUE}[4]${NC} 🔎 ${LIGHT_BLUE}Поиск по адресу${NC}"
+        echo -e "  ${ORANGE}[5]${NC} 📜 ${ORANGE}Все сообщения${NC}"
+        echo -e "  ${LIGHT_RED}[6]${NC} 🗑️  ${LIGHT_RED}Очистить все логи${NC}"
+        print_line
+        echo -e "  ${GRAY}[ESC/0]${NC} ${GRAY}← Назад${NC}"
+        echo ""
+        
+        echo -ne "${CYAN}Выбор: ${NC}"
+        local choice=$(read_key)
+        echo "$choice"
+        
+        if [[ "$choice" == "ESC" ]] || [[ "$choice" == "0" ]]; then
+            return
+        fi
+        
+        choice=$(convert_ru_to_en "$choice")
+        
+        case $choice in
+            1) view_admin_logs ;;
+            2) show_users_list ;;
+            3) search_by_nick ;;
+            4) search_by_address ;;
+            5) show_last_messages ;;
+            6)
+                if verify_pin "очистить логи"; then
+                    echo ""
+                    echo -ne "${RED}Удалить все логи? (y/n): ${NC}"
+                    read -r confirm
+                    if [[ "$confirm" =~ ^[yYдД]$ ]]; then
+                        rm -f "$logs_dir/admin.log" "$logs_dir/messages.log" 2>/dev/null
+                        echo -e "${GREEN}✓ Логи очищены${NC}"
+                    else
+                        echo -e "${GRAY}Отменено${NC}"
+                    fi
+                    sleep 1
+                fi
+                ;;
+            *) ;;
+        esac
+    done
+}
+
+# Показать список пользователей
+show_users_list() {
+    local msg_log="/home/user/ollama-bot/logs/messages.log"
+    
+    while true; do
+        print_header
+        echo -e "${WHITE}${BOLD}  👥 СПИСОК ПОЛЬЗОВАТЕЛЕЙ${NC}"
+        print_line
+        echo ""
+        
+        if [ ! -f "$msg_log" ]; then
+            echo -e "  ${YELLOW}Лог не найден${NC}"
+            press_enter
+            return
+        fi
+        
+        # Получаем уникальные адреса с количеством сообщений
+        local users=()
+        local i=1
+        
+        # Читаем в массив без подпроцесса
+        while IFS= read -r line; do
+            local hash=$(echo "$line" | cut -d' ' -f1)
+            local count=$(echo "$line" | cut -d' ' -f2)
+            local nick=$(get_user_nick "$hash")
+            users+=("$hash")
+            
+            # Цветовая индикация активности
+            local color="${GRAY}"
+            if [ "$count" -gt 100 ]; then
+                color="${LIGHT_GREEN}"
+            elif [ "$count" -gt 50 ]; then
+                color="${LIGHT_CYAN}"
+            elif [ "$count" -gt 10 ]; then
+                color="${WHITE}"
+            fi
+            
+            printf "  ${LIGHT_CYAN}[%2d]${NC} ${WHITE}%s${NC} ${GRAY}[%s]${NC} ${color}%d сообщ.${NC}\n" "$i" "$nick" "$hash" "$count"
+            ((i++))
+        done < <(cut -d'|' -f3 "$msg_log" 2>/dev/null | tr -d ' ' | sort | uniq -c | sort -rn | awk '{print $2, $1}')
+        
+        if [ ${#users[@]} -eq 0 ]; then
+            echo -e "  ${YELLOW}Пользователей не найдено${NC}"
+            press_enter
+            return
+        fi
+        
+        echo ""
+        print_line
+        echo -e "  ${GRAY}Введи номер для просмотра переписки${NC}"
+        echo -e "  ${GRAY}[0/Enter]${NC} ${GRAY}← Назад${NC}"
+        echo ""
+        
+        echo -ne "${CYAN}Номер: ${NC}"
+        read -r choice
+        
+        if [[ -z "$choice" ]] || [[ "$choice" == "0" ]]; then
+            return
+        fi
+        
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#users[@]}" ]; then
+            local selected_hash="${users[$((choice-1))]}"
+            view_user_messages "$selected_hash"
+        fi
+    done
+}
+
+# Просмотр сообщений пользователя с пагинацией
+view_user_messages() {
+    local user_hash="$1"
+    local msg_log="/home/user/ollama-bot/logs/messages.log"
+    local nick=$(get_user_nick "$user_hash")
+    local page_size=20
+    
+    if [ ! -f "$msg_log" ]; then
+        echo -e "  ${YELLOW}Лог не найден${NC}"
+        press_enter
+        return
+    fi
+    
+    # Создаём временный файл с сообщениями пользователя
+    local tmp_file="/tmp/user_messages_$$"
+    grep "$user_hash" "$msg_log" > "$tmp_file"
+    
+    local total_lines=$(wc -l < "$tmp_file")
+    if [ "$total_lines" -eq 0 ]; then
+        echo -e "  ${YELLOW}Сообщений не найдено${NC}"
+        rm -f "$tmp_file"
+        press_enter
+        return
+    fi
+    
+    local total_pages=$(( (total_lines + page_size - 1) / page_size ))
+    local current_page=$total_pages  # Начинаем с последней страницы (новые сообщения)
+    
+    while true; do
+        clear
+        echo ""
+        echo -e "${CYAN}═══ 💬 ПЕРЕПИСКА С ${WHITE}${nick}${CYAN} ═══${NC}"
+        echo -e "${GRAY}Адрес: ${user_hash}${NC}"
+        echo -e "${GRAY}Всего: $total_lines сообщений | Страница $current_page/$total_pages${NC}"
+        echo -e "${GRAY}[n] след. | [p] пред. | [f] первая | [l] последняя | [0] выход${NC}"
+        print_line
+        echo ""
+        
+        local start_line=$(( (current_page - 1) * page_size + 1 ))
+        local today=$(date '+%Y-%m-%d')
+        
+        sed -n "${start_line},+$((page_size - 1))p" "$tmp_file" | while IFS='|' read -r datetime direction hash message; do
+            datetime=$(echo "$datetime" | xargs)
+            direction=$(echo "$direction" | xargs)
+            message=$(echo "$message" | xargs)
+            
+            # Форматируем дату
+            local msg_date=$(echo "$datetime" | cut -d' ' -f1)
+            local msg_time=$(echo "$datetime" | cut -d' ' -f2)
+            
+            if [ "$msg_date" == "$today" ]; then
+                local time_display="      $msg_time"
+            else
+                local time_display="$msg_date $msg_time"
+            fi
+            
+            if [ "$direction" == "IN" ]; then
+                echo -e "${GRAY}$time_display${NC}"
+                echo -e "  ${LIGHT_BLUE}👤 $nick:${NC} $message"
+            else
+                echo -e "${GRAY}$time_display${NC}"
+                echo -e "  ${LIGHT_GREEN}🤖 Bot:${NC} $message"
+            fi
+            echo ""
+        done
+        
+        echo ""
+        print_line
+        echo -ne "${CYAN}Выбор: ${NC}"
+        local choice=$(read_key)
+        
+        if [[ "$choice" == "ESC" ]] || [[ "$choice" == "0" ]]; then
+            rm -f "$tmp_file"
+            return
+        fi
+        
+        choice=$(convert_ru_to_en "$choice")
+        
+        case $choice in
+            n|N) 
+                if [ "$current_page" -lt "$total_pages" ]; then
+                    ((current_page++))
+                fi
+                ;;
+            p|P)
+                if [ "$current_page" -gt 1 ]; then
+                    ((current_page--))
+                fi
+                ;;
+            f|F) current_page=1 ;;
+            l|L) current_page=$total_pages ;;
+            *) ;;
+        esac
+    done
+}
+
+# Поиск по нику
+search_by_nick() {
+    local msg_log="/home/user/ollama-bot/logs/messages.log"
+    
+    echo ""
+    echo -e "${CYAN}═══ ПОИСК ПО НИКУ ═══${NC}"
+    echo ""
+    echo -e "${GRAY}(Enter или 0 = отмена)${NC}"
+    echo ""
+    
+    echo -ne "${WHITE}Ник: ${NC}"
+    read -r search_nick
+    
+    if [ -z "$search_nick" ] || [ "$search_nick" == "0" ]; then
+        echo -e "${GRAY}Отменено${NC}"
+        sleep 0.5
+        return
+    fi
+    
+    print_header
+    echo -e "${WHITE}${BOLD}  🔍 РЕЗУЛЬТАТЫ ПОИСКА: '$search_nick'${NC}"
+    print_line
+    echo ""
+    
+    # Ищем адреса по нику в data.cfg
+    local found=0
+    while IFS='=' read -r hash nick_found; do
+        hash=$(echo "$hash" | xargs)
+        nick_found=$(echo "$nick_found" | xargs)
+        
+        if echo "$nick_found" | grep -qi "$search_nick"; then
+            echo -e "${WHITE}Найден: ${LIGHT_CYAN}$nick_found${NC} ${GRAY}[$hash]${NC}"
+            echo ""
+            
+            # Показываем последние сообщения
+            if [ -f "$msg_log" ]; then
+                local count=$(grep -c "$hash" "$msg_log" 2>/dev/null || echo "0")
+                echo -e "${GRAY}Сообщений: $count${NC}"
+                echo ""
+                
+                grep "$hash" "$msg_log" | tail -10 | while IFS='|' read -r datetime direction h message; do
+                    datetime=$(echo "$datetime" | xargs)
+                    direction=$(echo "$direction" | xargs)
+                    message=$(echo "$message" | xargs | cut -c1-60)
+                    
+                    if [ "$direction" == "IN" ]; then
+                        echo -e "  ${LIGHT_BLUE}→${NC} $datetime: $message"
+                    else
+                        echo -e "  ${LIGHT_GREEN}←${NC} $datetime: $message"
+                    fi
+                done
+            fi
+            
+            echo ""
+            print_line
+            found=1
+        fi
+    done < <(grep -v '^\[' /root/.config/lxmf_distribution_group_extended/data.cfg 2>/dev/null | grep '=')
+    
+    if [ $found -eq 0 ]; then
+        echo -e "${YELLOW}Ничего не найдено по запросу '$search_nick'${NC}"
+    fi
+    
+    press_enter
+}
+
+# Поиск по адресу
+search_by_address() {
+    local msg_log="/home/user/ollama-bot/logs/messages.log"
+    
+    echo ""
+    echo -e "${CYAN}═══ ПОИСК ПО АДРЕСУ ═══${NC}"
+    echo ""
+    echo -e "${GRAY}Введи полный адрес или часть (минимум 8 символов)${NC}"
+    echo -e "${GRAY}(Enter или 0 = отмена)${NC}"
+    echo ""
+    
+    echo -ne "${WHITE}Адрес: ${NC}"
+    read -r search_addr
+    
+    if [ -z "$search_addr" ] || [ "$search_addr" == "0" ]; then
+        echo -e "${GRAY}Отменено${NC}"
+        sleep 0.5
+        return
+    fi
+    
+    if [ ${#search_addr} -lt 8 ]; then
+        echo -e "${RED}Минимум 8 символов!${NC}"
+        sleep 1
+        return
+    fi
+    
+    print_header
+    echo -e "${WHITE}${BOLD}  🔎 РЕЗУЛЬТАТЫ ПОИСКА: '$search_addr'${NC}"
+    print_line
+    echo ""
+    
+    if [ ! -f "$msg_log" ]; then
+        echo -e "${YELLOW}Лог не найден${NC}"
+        press_enter
+        return
+    fi
+    
+    # Ищем по адресу
+    local matches=$(grep -i "$search_addr" "$msg_log" 2>/dev/null | head -1 | cut -d'|' -f3 | xargs)
+    
+    if [ -n "$matches" ]; then
+        local nick=$(get_user_nick "$matches")
+        local count=$(grep -c "$matches" "$msg_log" 2>/dev/null || echo "0")
+        
+        echo -e "${WHITE}Найден: ${LIGHT_CYAN}$nick${NC}"
+        echo -e "${GRAY}Адрес: $matches${NC}"
+        echo -e "${GRAY}Сообщений: $count${NC}"
+        echo ""
+        print_line
+        echo ""
+        
+        # Показываем последние сообщения
+        grep "$matches" "$msg_log" | tail -20 | while IFS='|' read -r datetime direction hash message; do
+            datetime=$(echo "$datetime" | xargs)
+            direction=$(echo "$direction" | xargs)
+            message=$(echo "$message" | xargs)
+            
+            if [ "$direction" == "IN" ]; then
+                echo -e "${GRAY}$datetime${NC}"
+                echo -e "  ${LIGHT_BLUE}👤 $nick:${NC} $message"
+            else
+                echo -e "${GRAY}$datetime${NC}"
+                echo -e "  ${LIGHT_GREEN}🤖 Bot:${NC} $message"
+            fi
+            echo ""
+        done
+    else
+        echo -e "${YELLOW}Ничего не найдено по адресу '$search_addr'${NC}"
+    fi
+    
+    press_enter
+}
+
+# Показать все сообщения с пагинацией
+show_last_messages() {
+    local msg_log="/home/user/ollama-bot/logs/messages.log"
+    local page_size=20
+    
+    if [ ! -f "$msg_log" ]; then
+        echo -e "${YELLOW}Лог не найден${NC}"
+        press_enter
+        return
+    fi
+    
+    local total_lines=$(wc -l < "$msg_log")
+    if [ "$total_lines" -eq 0 ]; then
+        echo -e "${YELLOW}Лог пуст${NC}"
+        press_enter
+        return
+    fi
+    
+    local total_pages=$(( (total_lines + page_size - 1) / page_size ))
+    local current_page=$total_pages  # Начинаем с последней страницы
+    
+    while true; do
+        clear
+        echo ""
+        echo -e "${CYAN}═══ 📜 ВСЕ СООБЩЕНИЯ ═══${NC}"
+        echo -e "${GRAY}Всего: $total_lines сообщений | Страница $current_page/$total_pages${NC}"
+        echo -e "${GRAY}[n] след. | [p] пред. | [f] первая | [l] последняя | [0] выход${NC}"
+        print_line
+        echo ""
+        
+        local start_line=$(( (current_page - 1) * page_size + 1 ))
+        
+        sed -n "${start_line},+$((page_size - 1))p" "$msg_log" | while IFS='|' read -r datetime direction hash message; do
+            datetime=$(echo "$datetime" | xargs)
+            direction=$(echo "$direction" | xargs)
+            hash=$(echo "$hash" | xargs)
+            message=$(echo "$message" | xargs)
+            
+            local nick=$(get_user_nick "$hash")
+            
+            # Форматируем дату
+            local msg_date=$(echo "$datetime" | cut -d' ' -f1)
+            local msg_time=$(echo "$datetime" | cut -d' ' -f2 | cut -c1-5)
+            
+            if [ "$direction" == "IN" ]; then
+                echo -e "${GRAY}$msg_date $msg_time${NC} ${LIGHT_BLUE}$nick${NC} ${GRAY}[$hash]${NC}"
+                echo -e "  ${GRAY}→${NC} $message"
+            else
+                echo -e "${GRAY}$msg_date $msg_time${NC} ${LIGHT_GREEN}Bot${NC} ${GRAY}→ $nick${NC}"
+                echo -e "  ${GRAY}←${NC} $message"
+            fi
+            echo ""
+        done
+        
+        echo ""
+        print_line
+        echo -ne "${CYAN}Выбор: ${NC}"
+        local choice=$(read_key)
+        
+        if [[ "$choice" == "ESC" ]] || [[ "$choice" == "0" ]]; then
+            return
+        fi
+        
+        choice=$(convert_ru_to_en "$choice")
+        
+        case $choice in
+            n|N) 
+                if [ "$current_page" -lt "$total_pages" ]; then
+                    ((current_page++))
+                fi
+                ;;
+            p|P)
+                if [ "$current_page" -gt 1 ]; then
+                    ((current_page--))
+                fi
+                ;;
+            f|F) current_page=1 ;;
+            l|L) current_page=$total_pages ;;
+            *) ;;
+        esac
+    done
+}
+
+# Просмотр логов админов с цветами и пагинацией
+view_admin_logs() {
+    local admin_log="/home/user/ollama-bot/logs/admin.log"
+    local page_size=20
+    
+    if [ ! -f "$admin_log" ]; then
+        echo -e "${YELLOW}Лог админа не найден${NC}"
+        press_enter
+        return
+    fi
+    
+    local total_lines=$(wc -l < "$admin_log")
+    if [ "$total_lines" -eq 0 ]; then
+        echo -e "${YELLOW}Лог пуст${NC}"
+        press_enter
+        return
+    fi
+    
+    local total_pages=$(( (total_lines + page_size - 1) / page_size ))
+    local current_page=$total_pages  # Начинаем с последней страницы
+    
+    while true; do
+        clear
+        echo ""
+        echo -e "${CYAN}═══ 👑 ЛОГИ АДМИНОВ ═══${NC}"
+        echo -e "${GRAY}Всего: $total_lines сообщений | Страница $current_page/$total_pages${NC}"
+        echo -e "${GRAY}[n] след. | [p] пред. | [f] первая | [l] последняя | [0] выход${NC}"
+        print_line
+        echo ""
+        
+        local start_line=$(( (current_page - 1) * page_size + 1 ))
+        
+        sed -n "${start_line},+$((page_size - 1))p" "$admin_log" | while IFS='|' read -r datetime direction hash message; do
+            datetime=$(echo "$datetime" | xargs)
+            direction=$(echo "$direction" | xargs)
+            hash=$(echo "$hash" | xargs)
+            message=$(echo "$message" | xargs)
+            
+            local nick=$(get_user_nick "$hash")
+            
+            # Форматируем дату
+            local msg_date=$(echo "$datetime" | cut -d' ' -f1)
+            local msg_time=$(echo "$datetime" | cut -d' ' -f2 | cut -c1-5)
+            
+            if [ "$direction" == "IN" ]; then
+                echo -e "${GRAY}$msg_date $msg_time${NC} ${LIGHT_PURPLE}👑 $nick${NC} ${GRAY}[$hash]${NC}"
+                echo -e "  ${GRAY}→${NC} $message"
+            else
+                echo -e "${GRAY}$msg_date $msg_time${NC} ${LIGHT_GREEN}🤖 Bot${NC} ${GRAY}→ $nick${NC}"
+                echo -e "  ${GRAY}←${NC} $message"
+            fi
+            echo ""
+        done
+        
+        echo ""
+        print_line
+        echo -ne "${CYAN}Выбор: ${NC}"
+        local choice=$(read_key)
+        
+        if [[ "$choice" == "ESC" ]] || [[ "$choice" == "0" ]]; then
+            return
+        fi
+        
+        choice=$(convert_ru_to_en "$choice")
+        
+        case $choice in
+            n|N) 
+                if [ "$current_page" -lt "$total_pages" ]; then
+                    ((current_page++))
+                fi
+                ;;
+            p|P)
+                if [ "$current_page" -gt 1 ]; then
+                    ((current_page--))
+                fi
+                ;;
+            f|F) current_page=1 ;;
+            l|L) current_page=$total_pages ;;
+            *) ;;
+        esac
+    done
+}
+
+# Просмотр лог-файла с пагинацией
+view_log_file() {
+    local log_file="$1"
+    local title="$2"
+    
+    if [ ! -f "$log_file" ]; then
+        echo ""
+        echo -e "${YELLOW}Лог-файл не найден или пуст${NC}"
+        press_enter
+        return
+    fi
+    
+    local lines=$(wc -l < "$log_file")
+    if [ "$lines" -eq 0 ]; then
+        echo ""
+        echo -e "${YELLOW}Лог пуст${NC}"
+        press_enter
+        return
+    fi
+    
+    local page_size=30
+    local total_pages=$(( (lines + page_size - 1) / page_size ))
+    local current_page=1
+    
+    while true; do
+        clear
+        echo ""
+        echo -e "${CYAN}═══ $title ═══${NC}"
+        echo -e "${GRAY}Всего: $lines записей | Страница $current_page/$total_pages${NC}"
+        echo -e "${GRAY}[n] след. | [p] пред. | [f] первая | [l] последняя | [0] выход${NC}"
+        print_line
+        echo ""
+        
+        local start_line=$(( (current_page - 1) * page_size + 1 ))
+        sed -n "${start_line},+$((page_size - 1))p" "$log_file"
+        
+        echo ""
+        print_line
+        echo -ne "${CYAN}Выбор: ${NC}"
+        local choice=$(read_key)
+        
+        if [[ "$choice" == "ESC" ]] || [[ "$choice" == "0" ]]; then
+            return
+        fi
+        
+        choice=$(convert_ru_to_en "$choice")
+        
+        case $choice in
+            n|N) 
+                if [ "$current_page" -lt "$total_pages" ]; then
+                    ((current_page++))
+                fi
+                ;;
+            p|P)
+                if [ "$current_page" -gt 1 ]; then
+                    ((current_page--))
+                fi
+                ;;
+            f|F) current_page=1 ;;
+            l|L) current_page=$total_pages ;;
+            *) ;;
+        esac
+    done
+}
+
+# Меню управления доверенными
+menu_trusted_users() {
+    local bot_db="/home/user/ollama-bot/bot_data"
+    
+    while true; do
+        print_header
+        echo -e "${WHITE}${BOLD}  👥 ДОВЕРЕННЫЕ ПОЛЬЗОВАТЕЛИ${NC}"
+        print_line
+        echo ""
+        echo -e "${GRAY}Доверенные могут создавать/удалять свои группы${NC}"
+        echo ""
+        
+        # Показываем текущий список
+        if [ -f "$bot_db" ]; then
+            local trusted=$(sqlite3 "$bot_db" "SELECT value FROM key_value WHERE key='trusted_users'" 2>/dev/null)
+            if [ -n "$trusted" ] && [ "$trusted" != "[]" ]; then
+                echo -e "${WHITE}Текущий список:${NC}"
+                echo "$trusted" | "$VENV_PATH/bin/python3" -c "
+import sys, json
+data = json.loads(sys.stdin.read())
+for i, h in enumerate(data, 1):
+    print(f'  {i}. {h}')
+print(f'\n  Всего: {len(data)}')
+" 2>/dev/null || echo -e "  ${GRAY}Ошибка чтения${NC}"
+            else
+                echo -e "  ${YELLOW}Список пуст${NC}"
+            fi
+        else
+            echo -e "  ${RED}База данных не найдена${NC}"
+        fi
+        
+        echo ""
+        print_line
+        echo -e "  ${LIGHT_GREEN}[1]${NC} ➕ ${LIGHT_GREEN}Добавить пользователя${NC}"
+        echo -e "  ${LIGHT_RED}[2]${NC} ➖ ${LIGHT_RED}Удалить пользователя${NC}"
+        echo -e "  ${LIGHT_CYAN}[3]${NC} 🔄 ${LIGHT_CYAN}Обновить список${NC}"
+        echo -e "  ${LIGHT_PURPLE}[4]${NC} 📋 ${LIGHT_PURPLE}Показать команды бота${NC}"
+        print_line
+        echo -e "  ${GRAY}[ESC/0]${NC} ${GRAY}← Назад${NC}"
+        echo ""
+        
+        echo -ne "${CYAN}Выбор: ${NC}"
+        local choice=$(read_key)
+        echo "$choice"
+        
+        if [[ "$choice" == "ESC" ]] || [[ "$choice" == "0" ]]; then
+            return
+        fi
+        
+        choice=$(convert_ru_to_en "$choice")
+        
+        case $choice in
+            1) add_trusted_user ;;
+            2) remove_trusted_user ;;
+            3) ;; # просто обновит экран
+            4) show_bot_commands ;;
+            *) ;;
+        esac
+    done
+}
+
+# Показать команды бота
+show_bot_commands() {
+    echo ""
+    echo -e "${CYAN}═══ КОМАНДЫ БОТА (ШПАРГАЛКА) ═══${NC}"
+    echo ""
+    echo -e "${WHITE}Админ команды:${NC}"
+    echo -e "  /adminhelp       - показать эту справку в боте"
+    echo ""
+    echo -e "${WHITE}Whitelist:${NC}"
+    echo -e "  /trust <hash>    - добавить доверенного"
+    echo -e "  /untrust <hash>  - убрать доверенного"
+    echo -e "  /trusted         - список доверенных"
+    echo ""
+    echo -e "${WHITE}Группы:${NC}"
+    echo -e "  /newgroup <название>            - создать группу"
+    echo -e "  /newgroup <название> private    - создать приватную"
+    echo -e "  /delgroup <название>            - удалить группу"
+    echo -e "  /renamegroup <старое> | <новое> - переименовать"
+    echo -e "  /setprivate <название>          - сделать приватной"
+    echo -e "  /setpublic <название>           - сделать публичной"
+    echo -e "  /groups                         - список групп"
+    echo -e "  /group <название>               - инфо о группе"
+    echo ""
+    echo -e "${WHITE}Статистика и управление:${NC}"
+    echo -e "  /stats           - статистика бота"
+    echo -e "  /status          - статус Ollama"
+    echo -e "  /models          - список моделей"
+    echo -e "  /setmodel <модель> - сменить модель"
+    echo -e "  /clearall        - очистить все истории"
+    echo ""
+    press_enter
+}
+
+# Добавление доверенного
+add_trusted_user() {
+    local bot_db="/home/user/ollama-bot/bot_data"
+    
+    echo ""
+    echo -e "${CYAN}═══ ДОБАВЛЕНИЕ ДОВЕРЕННОГО ═══${NC}"
+    echo ""
+    echo -e "${GRAY}Введи полный LXMF адрес (32 символа hex)${NC}"
+    echo -e "${GRAY}Пример: 14addeb7c3bb2ef4ff6f163af66c36f4${NC}"
+    echo -e "${GRAY}(Enter или 0 = отмена)${NC}"
+    echo ""
+    
+    echo -ne "${WHITE}Адрес: ${NC}"
+    read -r user_hash
+    
+    # Отмена
+    if [ -z "$user_hash" ] || [ "$user_hash" == "0" ]; then
+        echo -e "${GRAY}Отменено${NC}"
+        sleep 0.5
+        return
+    fi
+    
+    # Проверка формата
+    if [[ ! "$user_hash" =~ ^[a-fA-F0-9]{32}$ ]]; then
+        echo -e "${RED}✗ Неверный формат! Нужно 32 hex символа${NC}"
+        press_enter
+        return
+    fi
+    
+    user_hash=$(echo "$user_hash" | tr '[:upper:]' '[:lower:]')
+    
+    # Получаем текущий список
+    local trusted=$(sqlite3 "$bot_db" "SELECT value FROM key_value WHERE key='trusted_users'" 2>/dev/null)
+    if [ -z "$trusted" ]; then
+        trusted="[]"
+    fi
+    
+    # Проверяем есть ли уже
+    if echo "$trusted" | grep -q "$user_hash"; then
+        echo -e "${YELLOW}⚠ Уже в списке!${NC}"
+        press_enter
+        return
+    fi
+    
+    # Добавляем через Python
+    local new_trusted=$("$VENV_PATH/bin/python3" -c "
+import json
+data = json.loads('$trusted')
+data.append('$user_hash')
+print(json.dumps(data))
+" 2>/dev/null)
+    
+    # Сохраняем
+    sqlite3 "$bot_db" "INSERT OR REPLACE INTO key_value (key, value) VALUES ('trusted_users', '$new_trusted')" 2>/dev/null
+    
+    echo ""
+    echo -e "${GREEN}✓ Добавлен: ${WHITE}$user_hash${NC}"
+    echo -e "${YELLOW}Теперь этот пользователь может создавать группы!${NC}"
+    press_enter
+}
+
+# Удаление доверенного
+remove_trusted_user() {
+    local bot_db="/home/user/ollama-bot/bot_data"
+    
+    echo ""
+    echo -e "${CYAN}═══ УДАЛЕНИЕ ДОВЕРЕННОГО ═══${NC}"
+    echo ""
+    
+    # Получаем текущий список
+    local trusted=$(sqlite3 "$bot_db" "SELECT value FROM key_value WHERE key='trusted_users'" 2>/dev/null)
+    if [ -z "$trusted" ] || [ "$trusted" == "[]" ]; then
+        echo -e "${YELLOW}Список пуст!${NC}"
+        press_enter
+        return
+    fi
+    
+    # Показываем список с номерами
+    echo -e "${WHITE}Выбери номер для удаления:${NC}"
+    echo -e "${GRAY}(Enter или 0 = отмена)${NC}"
+    echo ""
+    local users_array=()
+    while IFS= read -r line; do
+        users_array+=("$line")
+    done < <("$VENV_PATH/bin/python3" -c "
+import json
+data = json.loads('$trusted')
+for h in data:
+    print(h)
+" 2>/dev/null)
+    
+    local i=1
+    for h in "${users_array[@]}"; do
+        echo -e "  ${LIGHT_CYAN}[$i]${NC} $h"
+        ((i++))
+    done
+    
+    echo ""
+    echo -ne "${WHITE}Номер: ${NC}"
+    read -r choice
+    
+    # Отмена
+    if [ -z "$choice" ] || [ "$choice" == "0" ]; then
+        echo -e "${GRAY}Отменено${NC}"
+        sleep 0.5
+        return
+    fi
+    
+    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#users_array[@]}" ]; then
+        echo -e "${RED}✗ Неверный номер!${NC}"
+        press_enter
+        return
+    fi
+    
+    local user_to_remove="${users_array[$((choice-1))]}"
+    
+    # Удаляем через Python
+    local new_trusted=$("$VENV_PATH/bin/python3" -c "
+import json
+data = json.loads('$trusted')
+data.remove('$user_to_remove')
+print(json.dumps(data))
+" 2>/dev/null)
+    
+    # Сохраняем
+    sqlite3 "$bot_db" "INSERT OR REPLACE INTO key_value (key, value) VALUES ('trusted_users', '$new_trusted')" 2>/dev/null
+    
+    echo ""
+    echo -e "${GREEN}✓ Удалён: ${WHITE}$user_to_remove${NC}"
+    press_enter
+}
+# ============================================================
+# Обновление прошивок RNode (вызов fetch-rnode-firmware.sh)
+# ============================================================
+
+FETCH_SCRIPT="/root/reticulum-node-stack/scripts/fetch-rnode-firmware.sh"
+
+update_rnode_firmware_select() {
+    print_header
+    echo -e "${WHITE}${BOLD}  Обновить одну прошивку${NC}"
+    print_line
+    echo ""
+    echo -e "${CYAN}Доступные имена устройств:${NC}"
+    echo -e "  ${GRAY}t114, lora32v2, lora32v3, heltec32v4${NC}"
+    echo -e "  ${GRAY}tbeam, tbeam_supreme, tbeam_sx1262${NC}"
+    echo -e "  ${GRAY}t3s3, t3s3_sx127x, t3s3_sx1280${NC}"
+    echo -e "  ${GRAY}tdeck, techo, rak4631${NC}"
+    echo -e "  ${GRAY}lora32v10, lora32v20, lora32v21${NC}"
+    echo -e "  ${GRAY}esp32, feather, ng20, ng21, xiao${NC}"
+    echo ""
+    echo -ne "${CYAN}Имя устройства (или Enter для отмены): ${NC}"
+    read device_name
+    if [ -z "$device_name" ]; then
+        echo -e "${GRAY}Отменено${NC}"
+        press_enter
+        return
+    fi
+    echo ""
+    "$FETCH_SCRIPT" "$device_name"
+    press_enter
+}
+
+menu_rnode_firmware() {
+    while true; do
+        print_header
+        echo -e "${WHITE}${BOLD}  🔄 Обновление прошивок RNode${NC}"
+        print_line
+        echo ""
+        echo -e "  ${GRAY}Источник: github.com/markqvist/RNode_Firmware${NC}"
+        echo -e "  ${GRAY}Бэкап: до 5 версий каждой прошивки сохраняется в .old/${NC}"
+        echo ""
+        print_line
+        echo -e "  ${GREEN}[1]${NC} ⬇ ${GREEN}Обновить все прошивки${NC} ${GRAY}(~6 МБ, с бэкапом)${NC}"
+        echo -e "  ${LIGHT_CYAN}[2]${NC} ➕ ${LIGHT_CYAN}Скачать только отсутствующие${NC}"
+        echo -e "  ${YELLOW}[3]${NC} 🎯 ${YELLOW}Обновить одну прошивку${NC}"
+        echo -e "  ${LIGHT_BLUE}[4]${NC} 📋 ${LIGHT_BLUE}Показать что есть на диске${NC}"
+        print_line
+        echo -e "  ${GRAY}[0]${NC} ${GRAY}← Назад / Enter${NC}"
+        echo ""
+
+        echo -ne "${CYAN}Выбор: ${NC}"
+        local choice=$(read_key)
+        echo "$choice"
+
+        if [[ "$choice" == "ESC" ]]; then
+            return
+        fi
+
+        choice=$(convert_ru_to_en "$choice")
+
+        case $choice in
+            1)
+                if verify_pin "обновить все прошивки RNode"; then
+                    echo ""
+                    "$FETCH_SCRIPT"
+                    press_enter
+                fi
+                ;;
+            2)
+                echo ""
+                "$FETCH_SCRIPT" --missing
+                press_enter
+                ;;
+            3)
+                if verify_pin "обновить прошивку RNode"; then
+                    update_rnode_firmware_select
+                fi
+                ;;
+            4)
+                echo ""
+                "$FETCH_SCRIPT" --list
+                press_enter
+                ;;
+            0) return ;;
+            q|Q) echo -e "\n${CYAN}Скрипт завершён.${NC}\n"; exit 0 ;;
+            *) ;;
+        esac
+    done
+}
+menu_surgutbot() {
+    local service="surgutbot86.service"
+    local name="${SERVICE_NAMES[$service]}"
+    
+    while true; do
+        print_header
+        echo -e "${WHITE}${BOLD}  $name${NC}"
+        print_line
+        echo ""
+        print_service_status "$service"
+        echo ""
+        print_line
+        echo -e "  ${GREEN}[1]${NC} ▶ ${GREEN}Запустить${NC}"
+        echo -e "  ${RED}[2]${NC} ■ ${RED}Остановить${NC}"
+        echo -e "  ${YELLOW}[3]${NC} ↻ ${YELLOW}Перезапустить${NC}"
+        echo -e "  ${LIGHT_CYAN}[4]${NC} 📜 ${LIGHT_CYAN}Показать логи${NC}"
+        echo -e "  ${LIGHT_BLUE}[5]${NC} ℹ️  ${LIGHT_BLUE}Подробный статус${NC}"
+        echo -e "  ${LIGHT_PURPLE}[6]${NC} 📊 ${LIGHT_PURPLE}Статистика бота${NC}"
+        echo -e "  ${ORANGE}[7]${NC} 📚 ${ORANGE}База знаний${NC}"
+        echo -e "  ${LIGHT_BLUE}[f]${NC} 🔄 ${LIGHT_BLUE}Обновление прошивок RNode${NC}"
+        echo -e "  ${LIGHT_RED}[e]${NC} 💻 ${LIGHT_RED}Редактировать код бота${NC}"
+        echo -e "  ${LIGHT_CYAN}[s]${NC} ⚙️  ${LIGHT_CYAN}Настройки бота (.env)${NC}"
+        echo -e "  ${LIGHT_GREEN}[t]${NC} 👥 ${LIGHT_GREEN}Доверенные пользователи${NC}"
+        echo -e "  ${PINK}[l]${NC} 📋 ${PINK}Логи сообщений${NC}"
+        print_line
+        echo -e "  ${GRAY}[0]${NC} ${GRAY}← Назад / Enter${NC}"
+        echo ""
+        
+        echo -ne "${CYAN}Выбор: ${NC}"
+        local choice=$(read_key)
+        echo "$choice"
+        
+        # Проверяем ESC
+        if [[ "$choice" == "ESC" ]]; then
+            return
+        fi
+        
+        choice=$(convert_ru_to_en "$choice")
+        
+        case $choice in
+            1) start_service "$service"; press_enter ;;
+            2) 
+                if verify_pin "остановить бота"; then
+                    stop_service "$service"
+                    press_enter
+                fi
+                ;;
+            3) restart_service "$service"; press_enter ;;
+            4)
+                echo ""
+                echo -e "${CYAN}═══ ЛОГИ: $name (Ctrl+C для выхода) ═══${NC}"
+                sudo journalctl -u "$service" -f --no-pager -n 50
+                ;;
+            5)
+                echo ""
+                sudo systemctl status "$service"
+                press_enter
+                ;;
+            6) show_bot_stats ;;
+            7) 
+                if verify_pin "редактировать базу знаний"; then
+                    menu_knowledge_base
+                fi
+                ;;
+            f|F)
+                menu_rnode_firmware
+                ;;
+            e|E) 
+                if verify_pin "редактировать код бота"; then
+                    edit_bot_code
+                fi
+                ;;
+            s|S)
+                if verify_pin "настройки бота"; then
+                    edit_bot_settings
+                fi
+                ;;
+            t|T)
+                if verify_pin "управление доверенными"; then
+                    menu_trusted_users
+                fi
+                ;;
+            l|L)
+                if verify_pin "просмотр логов"; then
+                    menu_bot_logs
+                fi
+                ;;
+            0) return ;;
+            q|Q) echo -e "\n${CYAN}Скрипт завершён.${NC}\n"; exit 0 ;;
+            *) ;;
+        esac
+    done
+}
+
+# Просмотр чатов бота
+show_bot_chats() {
+    local bot_db="/home/user/ollama-bot/bot_data"
+    
+    while true; do
+        print_header
+        echo -e "${WHITE}${BOLD}  💬 ЧАТЫ БОТА${NC}"
+        print_line
+        echo ""
+        
+        if [ ! -f "$bot_db" ]; then
+            echo -e "  ${RED}База данных бота не найдена${NC}"
+            press_enter
+            return
+        fi
+        
+        # Получаем список пользователей с историей
+        local users=()
+        local i=1
+        
+        while IFS= read -r line; do
+            local hash=$(echo "$line" | sed 's/history_//')
+            # Получаем ник из data.cfg группы если есть
+            local nick=$(grep "$hash" /root/.config/lxmf_distribution_group_extended/data.cfg 2>/dev/null | head -1 | cut -d'=' -f2 | tr -d ' ')
+            if [ -z "$nick" ]; then
+                nick="${hash:0:8}..."
+            fi
+            users+=("$hash")
+            echo -e "  ${LIGHT_CYAN}[$i]${NC} ${LIGHT_CYAN}$nick${NC} ${GRAY}[$hash]${NC}"
+            ((i++))
+        done < <(sqlite3 "$bot_db" "SELECT key FROM key_value WHERE key LIKE 'history_%'" 2>/dev/null)
+        
+        echo ""
+        print_line
+        echo -e "  ${GRAY}[0]${NC} ${GRAY}← Назад / Enter${NC}"
+        echo ""
+        
+        echo -ne "${CYAN}Выбор: ${NC}"
+        local choice=$(read_key)
+        echo "$choice"
+        
+        # Проверяем ESC
+        if [[ "$choice" == "ESC" ]]; then
+            return
+        fi
+        
+        choice=$(convert_ru_to_en "$choice")
+        
+        if [[ "$choice" == "0" ]]; then
+            return
+        elif [[ "$choice" =~ ^[qQ]$ ]]; then
+            echo -e "\n${CYAN}Скрипт завершён.${NC}\n"
+            exit 0
+        elif [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#users[@]}" ]; then
+            local selected_hash="${users[$((choice-1))]}"
+            show_chat_history "$selected_hash"
+        fi
+    done
+}
+
+# Показать историю чата с пользователем (с автообновлением)
+show_chat_history() {
+    local user_hash="$1"
+    local bot_db="/home/user/ollama-bot/bot_data"
+    local paused=0
+    
+    # Получаем ник пользователя
+    local user_nick=$(grep "$user_hash" /root/.config/lxmf_distribution_group_extended/data.cfg 2>/dev/null | head -1 | cut -d'=' -f2 | tr -d ' ')
+    if [ -z "$user_nick" ]; then
+        user_nick="${user_hash:0:8}..."
+    fi
+    
+    while true; do
+        clear
+        echo ""
+        echo -e "${CYAN}═══ ЧАТ С ${user_nick} ═══${NC}"
+        if [ $paused -eq 1 ]; then
+            echo -e "${YELLOW}⏸ ПАУЗА${NC} | ${GRAY}[p] продолжить | [Enter] выход${NC}"
+        else
+            echo -e "${GRAY}Обновление: $(date '+%H:%M:%S') | [p] пауза | [Enter] выход${NC}"
+        fi
+        print_line
+        echo ""
+        
+        sudo "$VENV_PATH/bin/python3" << PYEOF
+import sqlite3
+import json
+
+db = sqlite3.connect("$bot_db")
+cursor = db.cursor()
+cursor.execute("SELECT value FROM key_value WHERE key = ?", ("history_$user_hash",))
+row = cursor.fetchone()
+
+user_nick = "$user_nick"
+
+if row:
+    history = json.loads(row[0])
+    total = len(history)
+    print(f"\033[0;90mВсего сообщений: {total}\033[0m")
+    print()
+    
+    for msg in history:
+        role = msg.get('role', 'unknown')
+        content = msg.get('content', '').strip()
+        
+        if role == 'user':
+            print(f"\033[1;34m👤 {user_nick}:\033[0m")
+            print(f"   {content}")
+        else:
+            print(f"\033[1;32m🤖 SurgutBot86:\033[0m")
+            print(f"   {content}")
+        print()
+else:
+    print("История не найдена")
+
+db.close()
+PYEOF
+        
+        if [ $paused -eq 1 ]; then
+            # В режиме паузы — ждём нажатия клавиши
+            local key=$(read_key)
+            case "$key" in
+                p|P|з|З) paused=0 ;;  # Продолжить
+                "") break ;;           # Enter — выход
+                *) ;;                  # Другие клавиши — игнор
+            esac
+        else
+            # Автообновление — ждём 10 сек или клавишу
+            read -t 10 -rsn1 key
+            if [ $? -eq 0 ]; then
+                case "$key" in
+                    p|P|з|З) paused=1 ;;  # Пауза
+                    "") break ;;           # Enter — выход
+                    *) ;;
+                esac
+            fi
+        fi
+    done
+}
+
+# Статистика бота
+show_bot_stats() {
+    echo ""
+    echo -e "${CYAN}═══ СТАТИСТИКА SURGUTBOT86 ═══${NC}"
+    echo ""
+    
+    local bot_db="/home/user/ollama-bot/bot_data"
+    
+    if [ -f "$bot_db" ]; then
+        # Всего сообщений
+        local total_msg=$(sqlite3 "$bot_db" "SELECT value FROM key_value WHERE key='stat_total_messages'" 2>/dev/null || echo "0")
+        echo -e "  📨 Всего сообщений: ${WHITE}${total_msg:-0}${NC}"
+        
+        # Всего пользователей
+        local total_users=$(sqlite3 "$bot_db" "SELECT value FROM key_value WHERE key='stat_total_users'" 2>/dev/null || echo "0")
+        echo -e "  👥 Всего пользователей: ${WHITE}${total_users:-0}${NC}"
+        
+        # Активные сегодня
+        local today=$(date +%Y-%m-%d)
+        local dau=$(sqlite3 "$bot_db" "SELECT value FROM key_value WHERE key='stat_dau_$today'" 2>/dev/null)
+        if [ -n "$dau" ]; then
+            local dau_count=$(echo "$dau" | grep -o '"' | wc -l)
+            dau_count=$((dau_count / 2))
+            echo -e "  📅 Активных сегодня: ${WHITE}$dau_count${NC}"
+        else
+            echo -e "  📅 Активных сегодня: ${WHITE}0${NC}"
+        fi
+        
+        echo ""
+        
+        # Использование ресурсов
+        local pid=$(systemctl show -p MainPID "$service" 2>/dev/null | cut -d= -f2)
+        if [ "$pid" != "0" ] && [ -n "$pid" ]; then
+            echo -e "  ${GRAY}Ресурсы (PID: $pid):${NC}"
+            ps -p "$pid" -o %cpu,%mem,rss --no-headers 2>/dev/null | \
+                awk '{printf "  CPU: %s%%  MEM: %s%%  RAM: %.1f MB\n", $1, $2, $3/1024}'
+        fi
+    else
+        echo -e "  ${RED}База данных бота не найдена${NC}"
+    fi
+    
+    press_enter
+}
+
+menu_bot() {
+    menu_surgutbot
+}
+
+# ══════════════════════════════════════════════════════════════════
+# ПОДМЕНЮ: НАСТРОЙКИ RNODE
+# ══════════════════════════════════════════════════════════════════
+
+menu_rnode_settings() {
+    local rnode_port=""
+    
+    # Ищем порт RNode
+    for port in /dev/ttyACM0 /dev/ttyACM1 /dev/ttyUSB0 /dev/ttyUSB1; do
+        if [ -e "$port" ]; then
+            rnode_port="$port"
+            break
+        fi
+    done
+    
+    while true; do
+        print_header
+        echo -e "${WHITE}${BOLD}  📡 НАСТРОЙКИ RNODE${NC}"
+        print_line
+        echo ""
+        
+        if [ -n "$rnode_port" ]; then
+            echo -e "  ${GREEN}●${NC} RNode порт: ${WHITE}$rnode_port${NC}"
+        else
+            echo -e "  ${RED}●${NC} RNode ${RED}не найден${NC}"
+            echo ""
+            press_enter
+            return
+        fi
+        
+        echo ""
+        print_line
+        echo -e "${WHITE}  Таймаут экрана:${NC}"
+        echo -e "  ${LIGHT_GREEN}[1]${NC} 30 секунд"
+        echo -e "  ${LIGHT_CYAN}[2]${NC} 60 секунд (1 мин)"
+        echo -e "  ${LIGHT_BLUE}[3]${NC} 120 секунд (2 мин)"
+        echo -e "  ${LIGHT_PURPLE}[4]${NC} 255 секунд (макс)"
+        echo -e "  ${YELLOW}[5]${NC} Всегда включён"
+        echo -e "  ${ORANGE}[6]${NC} Своё значение (0-255)..."
+        print_line
+        echo -e "${WHITE}  Яркость экрана:${NC}"
+        echo -e "  ${PINK}[b]${NC} Настроить яркость (0-255)"
+        print_line
+        echo -e "  ${LIGHT_CYAN}[i]${NC} Информация о RNode"
+        print_line
+        echo -e "  ${GRAY}[ESC/0]${NC} ${GRAY}← Назад${NC}"
+        echo ""
+        
+        echo -ne "${CYAN}Выбор: ${NC}"
+        local choice=$(read_key)
+        echo "$choice"
+        
+        if [[ "$choice" == "ESC" ]] || [[ "$choice" == "0" ]]; then
+            return
+        fi
+        
+        choice=$(convert_ru_to_en "$choice")
+        
+        case $choice in
+            1) set_rnode_timeout "$rnode_port" 30 ;;
+            2) set_rnode_timeout "$rnode_port" 60 ;;
+            3) set_rnode_timeout "$rnode_port" 120 ;;
+            4) set_rnode_timeout "$rnode_port" 255 ;;
+            5) set_rnode_timeout "$rnode_port" 0 ;;
+            6)
+                echo ""
+                echo -ne "${CYAN}Введи таймаут в секундах (0-255, 0 = всегда включён): ${NC}"
+                read -r custom_timeout
+                if [[ "$custom_timeout" =~ ^[0-9]+$ ]] && [ "$custom_timeout" -ge 0 ] && [ "$custom_timeout" -le 255 ]; then
+                    set_rnode_timeout "$rnode_port" "$custom_timeout"
+                else
+                    echo -e "${RED}Неверное значение (0-255)${NC}"
+                    sleep 1
+                fi
+                ;;
+            b|B)
+                echo ""
+                echo -ne "${CYAN}Введи яркость (0-255, 0 = выкл): ${NC}"
+                read -r brightness
+                if [[ "$brightness" =~ ^[0-9]+$ ]] && [ "$brightness" -ge 0 ] && [ "$brightness" -le 255 ]; then
+                    set_rnode_brightness "$rnode_port" "$brightness"
+                else
+                    echo -e "${RED}Неверное значение (0-255)${NC}"
+                    sleep 1
+                fi
+                ;;
+            i|I)
+                show_rnode_info "$rnode_port"
+                ;;
+            *) ;;
+        esac
+    done
+}
+
+set_rnode_timeout() {
+    local port="$1"
+    local timeout="$2"
+    
+    echo ""
+    echo -e "${YELLOW}Останавливаю Reticulum...${NC}"
+    sudo systemctl stop reticulum.service
+    sleep 1
+    
+    echo -e "${YELLOW}Настраиваю скорость порта...${NC}"
+    stty -F "$port" 9600
+    
+    echo -e "${YELLOW}Устанавливаю таймаут экрана: ${WHITE}${timeout} сек${NC}"
+    "$VENV_PATH/bin/rnodeconf" "$port" -t "$timeout"
+    
+    echo -e "${YELLOW}Запускаю Reticulum...${NC}"
+    sudo systemctl start reticulum.service
+    sleep 1
+    
+    if [ "$timeout" -eq 0 ]; then
+        echo -e "${GREEN}✓ Экран будет всегда включён${NC}"
+    else
+        echo -e "${GREEN}✓ Экран выключится через ${timeout} сек${NC}"
+    fi
+    press_enter
+}
+
+set_rnode_brightness() {
+    local port="$1"
+    local brightness="$2"
+    
+    echo ""
+    echo -e "${YELLOW}Останавливаю Reticulum...${NC}"
+    sudo systemctl stop reticulum.service
+    sleep 1
+    
+    echo -e "${YELLOW}Настраиваю скорость порта...${NC}"
+    stty -F "$port" 9600
+    
+    echo -e "${YELLOW}Устанавливаю яркость: ${WHITE}${brightness}${NC}"
+    "$VENV_PATH/bin/rnodeconf" "$port" -D "$brightness"
+    
+    echo -e "${YELLOW}Запускаю Reticulum...${NC}"
+    sudo systemctl start reticulum.service
+    sleep 1
+    
+    if [ "$brightness" -eq 0 ]; then
+        echo -e "${GREEN}✓ Экран выключен${NC}"
+    else
+        echo -e "${GREEN}✓ Яркость установлена: ${brightness}${NC}"
+    fi
+    press_enter
+}
+
+show_rnode_info() {
+    local port="$1"
+    
+    echo ""
+    echo -e "${YELLOW}Останавливаю Reticulum...${NC}"
+    sudo systemctl stop reticulum.service
+    sleep 1
+    
+    echo -e "${YELLOW}Настраиваю скорость порта...${NC}"
+    stty -F "$port" 9600
+    
+    echo ""
+    echo -e "${CYAN}═══ ИНФОРМАЦИЯ О RNODE ═══${NC}"
+    echo ""
+    "$VENV_PATH/bin/rnodeconf" "$port" -i
+    
+    echo ""
+    echo -e "${YELLOW}Запускаю Reticulum...${NC}"
+    sudo systemctl start reticulum.service
+    
+    press_enter
+}
+
+# ══════════════════════════════════════════════════════════════════
+# ПОДМЕНЮ: МОСТ MESHTASTIC
+# ══════════════════════════════════════════════════════════════════
+
+MESHTASTIC_INTERFACE_FILE="/root/.reticulum/interfaces/Meshtastic_Interface.py"
+MESHTASTIC_PORT="/dev/ttyACM1"
+
+menu_meshtastic_bridge() {
+    while true; do
+        print_header
+        echo -e "${WHITE}${BOLD}  🌉 МОСТ MESHTASTIC ↔ RETICULUM${NC}"
+        print_line
+        echo ""
+        
+        # Проверяем статус моста
+        local bridge_status=$("$VENV_PATH/bin/rnstatus" 2>/dev/null | grep -A6 "MeshtasticInterface")
+        if echo "$bridge_status" | grep -q "Status.*Up"; then
+            echo -e "  ${GREEN}●${NC} Мост: ${GREEN}[РАБОТАЕТ]${NC}"
+            # Извлекаем трафик
+            local traffic=$(echo "$bridge_status" | grep "Traffic" | head -1)
+            if [ -n "$traffic" ]; then
+                echo -e "  ${GRAY}$traffic${NC}"
+            fi
+        else
+            echo -e "  ${RED}●${NC} Мост: ${RED}[НЕ АКТИВЕН]${NC}"
+        fi
+        
+        # Проверяем наличие файла интерфейса
+        if [ -f "$MESHTASTIC_INTERFACE_FILE" ]; then
+            echo -e "  ${GREEN}●${NC} Файл интерфейса: ${GREEN}установлен${NC}"
+        else
+            echo -e "  ${RED}●${NC} Файл интерфейса: ${RED}не найден${NC}"
+        fi
+        
+        # Проверяем порт Meshtastic
+        if [ -e "$MESHTASTIC_PORT" ]; then
+            echo -e "  ${GREEN}●${NC} Порт Meshtastic: ${WHITE}$MESHTASTIC_PORT${NC}"
+        else
+            echo -e "  ${YELLOW}●${NC} Порт Meshtastic: ${YELLOW}не подключён${NC}"
+        fi
+        
+        echo ""
+        print_line
+        echo -e "  ${LIGHT_GREEN}[1]${NC} 📊 ${LIGHT_GREEN}Статус моста (подробно)${NC}"
+        echo -e "  ${LIGHT_CYAN}[2]${NC} 🔄 ${LIGHT_CYAN}Перезапустить мост${NC}"
+        echo -e "  ${LIGHT_BLUE}[3]${NC} 📜 ${LIGHT_BLUE}Логи моста${NC}"
+        echo -e "  ${LIGHT_PURPLE}[4]${NC} ⚙️  ${LIGHT_PURPLE}Конфиг моста${NC}"
+        echo -e "  ${YELLOW}[5]${NC} 📡 ${YELLOW}Информация о Meshtastic ноде${NC}"
+        echo -e "  ${ORANGE}[6]${NC} 📈 ${ORANGE}Мониторинг трафика (live)${NC}"
+        echo -e "  ${PINK}[7]${NC} 🔍 ${PINK}Проверить версию моста${NC}"
+        echo -e "  ${LIGHT_GREEN}[8]${NC} ⬆️  ${LIGHT_GREEN}Обновить мост${NC}"
+        echo -e "  ${RED}[9]${NC} ⏪ ${RED}Восстановить из backup${NC}"
+        print_line
+        echo -e "  ${GRAY}[ESC/0]${NC} ${GRAY}← Назад${NC}"
+        echo ""
+        
+        echo -ne "${CYAN}Выбор: ${NC}"
+        local choice=$(read_key)
+        echo "$choice"
+        
+        if [[ "$choice" == "ESC" ]] || [[ "$choice" == "0" ]]; then
+            return
+        fi
+        
+        choice=$(convert_ru_to_en "$choice")
+        
+        case $choice in
+            1) show_bridge_status ;;
+            2) restart_bridge ;;
+            3) show_bridge_logs ;;
+            4) edit_bridge_config ;;
+            5) show_meshtastic_info ;;
+            6) monitor_bridge_traffic ;;
+            7) check_bridge_version ;;
+            8) update_bridge ;;
+            9) restore_bridge_backup ;;
+            *) ;;
+        esac
+    done
+}
+
+show_bridge_status() {
+    echo ""
+    echo -e "${CYAN}═══ СТАТУС МОСТА MESHTASTIC ═══${NC}"
+    echo ""
+    
+    # Показываем RNode
+    echo -e "${WHITE}RNode (Reticulum LoRa):${NC}"
+    "$VENV_PATH/bin/rnstatus" 2>/dev/null | grep -A12 "RNodeInterface" | head -13
+    echo ""
+    
+    # Показываем Meshtastic
+    echo -e "${WHITE}Meshtastic Interface:${NC}"
+    "$VENV_PATH/bin/rnstatus" 2>/dev/null | grep -A6 "MeshtasticInterface"
+    echo ""
+    
+    # Показываем Transport Instance
+    "$VENV_PATH/bin/rnstatus" 2>/dev/null | grep -E "Transport Instance|Uptime"
+    
+    press_enter
+}
+
+restart_bridge() {
+    echo ""
+    echo -e "${YELLOW}Перезапускаю Reticulum (мост перезапустится автоматически)...${NC}"
+    sudo systemctl restart reticulum.service
+    sleep 2
+    
+    # Проверяем статус
+    local bridge_status=$("$VENV_PATH/bin/rnstatus" 2>/dev/null | grep -A1 "MeshtasticInterface")
+    if echo "$bridge_status" | grep -q "Status.*Up"; then
+        echo -e "${GREEN}✓ Мост успешно перезапущен!${NC}"
+    else
+        echo -e "${RED}✗ Мост не запустился. Проверь логи.${NC}"
+    fi
+    
+    press_enter
+}
+
+show_bridge_logs() {
+    echo ""
+    echo -e "${CYAN}═══ ЛОГИ МОСТА (последние 50 строк) ═══${NC}"
+    echo -e "${GRAY}(Ctrl+C для выхода из live режима)${NC}"
+    echo ""
+    
+    # Показываем логи с фильтром по Meshtastic (точное совпадение)
+    journalctl -u reticulum.service --no-pager -n 50 | grep -i "Meshtastic" --color=always || \
+    echo -e "${YELLOW}Нет логов Meshtastic. Показываю общие логи:${NC}" && \
+    journalctl -u reticulum.service --no-pager -n 20
+    
+    echo ""
+    echo -e "${YELLOW}Показать live логи? (y/n, 0 = отмена)${NC}"
+    read -r answer
+    if [[ "$answer" == "y" || "$answer" == "Y" || "$answer" == "д" || "$answer" == "Д" ]]; then
+        echo -e "${GRAY}Нажми Ctrl+C для выхода...${NC}"
+        journalctl -u reticulum.service -f | grep -i "Meshtastic" --color=always
+    fi
+    
+    press_enter
+}
+
+edit_bridge_config() {
+    echo ""
+    echo -e "${CYAN}═══ КОНФИГ МОСТА ═══${NC}"
+    echo ""
+    
+    # Показываем текущую конфигурацию моста
+    echo -e "${WHITE}Текущая конфигурация:${NC}"
+    grep -A10 "\[\[Meshtastic" ~/.reticulum/config 2>/dev/null || echo "Секция Meshtastic не найдена в конфиге"
+    
+    echo ""
+    echo -e "${YELLOW}[1]${NC} Редактировать конфиг"
+    echo -e "${YELLOW}[2]${NC} Только просмотр"
+    echo -ne "${CYAN}Выбор: ${NC}"
+    read -r answer
+    
+    if [[ "$answer" == "1" ]]; then
+        ${EDITOR:-nano} ~/.reticulum/config
+        echo ""
+        echo -e "${YELLOW}Перезапустить Reticulum для применения изменений? (y/n)${NC}"
+        read -r restart
+        if [[ "$restart" == "y" || "$restart" == "Y" ]]; then
+            sudo systemctl restart reticulum.service
+            echo -e "${GREEN}✓ Reticulum перезапущен${NC}"
+        fi
+    fi
+    
+    press_enter
+}
+
+show_meshtastic_info() {
+    echo ""
+    echo -e "${YELLOW}⚠️  Для получения информации о Meshtastic ноде${NC}"
+    echo -e "${YELLOW}   необходимо остановить Reticulum на несколько секунд.${NC}"
+    echo ""
+    echo -e "${CYAN}Продолжить? (y/n, 0 = отмена)${NC}"
+    read -r answer
+    
+    if [[ "$answer" == "0" || "$answer" == "n" || "$answer" == "N" || "$answer" == "н" || "$answer" == "Н" ]]; then
+        echo -e "${GRAY}Отменено${NC}"
+        sleep 1
+        return
+    fi
+    
+    if [[ "$answer" != "y" && "$answer" != "Y" && "$answer" != "д" && "$answer" != "Д" ]]; then
+        echo -e "${GRAY}Отменено${NC}"
+        sleep 1
+        return
+    fi
+    
+    echo ""
+    echo -e "${YELLOW}Останавливаю Reticulum...${NC}"
+    sudo systemctl stop reticulum.service
+    sleep 2
+    
+    echo -e "${CYAN}═══ ИНФОРМАЦИЯ О MESHTASTIC НОДЕ ═══${NC}"
+    echo ""
+    
+    # Проверяем установлен ли meshtastic
+    if command -v meshtastic &> /dev/null || [ -f "$VENV_PATH/bin/meshtastic" ]; then
+        "$VENV_PATH/bin/meshtastic" --port "$MESHTASTIC_PORT" --info 2>/dev/null || \
+        meshtastic --port "$MESHTASTIC_PORT" --info 2>/dev/null || \
+        echo -e "${RED}Не удалось получить информацию. Порт занят или нода отключена.${NC}"
+    else
+        echo -e "${YELLOW}Meshtastic CLI не установлен.${NC}"
+        echo -e "${GRAY}Установить: pip install meshtastic${NC}"
+    fi
+    
+    echo ""
+    echo -e "${YELLOW}Запускаю Reticulum...${NC}"
+    sudo systemctl start reticulum.service
+    sleep 1
+    echo -e "${GREEN}✓ Reticulum запущен${NC}"
+    
+    press_enter
+}
+
+monitor_bridge_traffic() {
+    echo ""
+    echo -e "${CYAN}═══ МОНИТОРИНГ ТРАФИКА МОСТА ═══${NC}"
+    echo -e "${GRAY}Обновление каждые 2 секунды. Нажми Ctrl+C для выхода.${NC}"
+    echo ""
+    
+    trap "return" SIGINT
+    
+    while true; do
+        clear
+        echo -e "${CYAN}═══ МОНИТОРИНГ ТРАФИКА МОСТА ═══${NC}"
+        echo -e "${GRAY}$(date '+%Y-%m-%d %H:%M:%S') | Ctrl+C для выхода${NC}"
+        echo ""
+        
+        # RNode
+        echo -e "${WHITE}📡 RNode LoRa:${NC}"
+        "$VENV_PATH/bin/rnstatus" 2>/dev/null | grep -A12 "RNodeInterface" | grep -E "Status|Traffic|Airtime|Ch\. Load|Noise"
+        echo ""
+        
+        # Meshtastic
+        echo -e "${WHITE}🌉 Meshtastic:${NC}"
+        "$VENV_PATH/bin/rnstatus" 2>/dev/null | grep -A6 "MeshtasticInterface" | grep -E "Status|Traffic|Rate"
+        echo ""
+        
+        # Transport
+        "$VENV_PATH/bin/rnstatus" 2>/dev/null | grep "Uptime"
+        
+        sleep 2
+    done
+    
+    trap - SIGINT
+}
+
+check_bridge_version() {
+    echo ""
+    echo -e "${CYAN}═══ ВЕРСИЯ МОСТА MESHTASTIC ═══${NC}"
+    echo ""
+    
+    if [ -f "$MESHTASTIC_INTERFACE_FILE" ]; then
+        # Локальная версия - дата изменения и первые строки
+        echo -e "${WHITE}Локальный файл:${NC}"
+        echo -e "  Путь: ${GRAY}$MESHTASTIC_INTERFACE_FILE${NC}"
+        local local_date=$(stat -c %y "$MESHTASTIC_INTERFACE_FILE" 2>/dev/null | cut -d'.' -f1)
+        echo -e "  Дата изменения: ${YELLOW}$local_date${NC}"
+        
+        # Показываем версию из комментария
+        local local_version=$(head -5 "$MESHTASTIC_INTERFACE_FILE" | grep -i -E "version|copyright|license" | head -1)
+        echo -e "  Инфо: ${GRAY}$local_version${NC}"
+        
+        # Проверяем наличие backup
+        if [ -f "${MESHTASTIC_INTERFACE_FILE}.backup" ]; then
+            local backup_date=$(stat -c %y "${MESHTASTIC_INTERFACE_FILE}.backup" 2>/dev/null | cut -d'.' -f1)
+            echo -e "  Backup: ${GREEN}есть${NC} ${GRAY}($backup_date)${NC}"
+        else
+            echo -e "  Backup: ${GRAY}нет${NC}"
+        fi
+        echo ""
+        
+        # Проверяем удалённую версию
+        echo -e "${WHITE}Проверяю обновления на GitHub...${NC}"
+        local remote_info=$(curl -s --connect-timeout 10 "https://api.github.com/repos/landandair/RNS_Over_Meshtastic/commits/main" 2>/dev/null)
+        
+        if [ -n "$remote_info" ] && echo "$remote_info" | grep -q '"sha"'; then
+            # Парсим дату из блока "commit" -> "author" -> "date"
+            local remote_date=$(echo "$remote_info" | grep -m1 '"date":' | sed 's/.*"date": *"\([^"]*\)".*/\1/')
+            # Парсим сообщение коммита
+            local remote_message=$(echo "$remote_info" | grep -m1 '"message":' | sed 's/.*"message": *"\([^"]*\)".*/\1/' | cut -c1-50)
+            
+            if [ -n "$remote_date" ]; then
+                echo -e "  Последний коммит: ${GREEN}$remote_date${NC}"
+                echo -e "  Сообщение: ${GRAY}$remote_message${NC}"
+            else
+                echo -e "  ${YELLOW}Не удалось распарсить дату коммита${NC}"
+            fi
+        else
+            echo -e "  ${RED}Нет доступа к GitHub или ошибка API${NC}"
+        fi
+    else
+        echo -e "${RED}Файл интерфейса не найден: $MESHTASTIC_INTERFACE_FILE${NC}"
+    fi
+    
+    press_enter
+}
+
+update_bridge() {
+    echo ""
+    echo -e "${CYAN}═══ ОБНОВЛЕНИЕ МОСТА MESHTASTIC ═══${NC}"
+    echo ""
+    
+    echo -e "${YELLOW}Скачать последнюю версию с GitHub? (y/n, 0 = отмена)${NC}"
+    read -r answer
+    
+    if [[ "$answer" == "0" || "$answer" == "n" || "$answer" == "N" || "$answer" == "н" || "$answer" == "Н" ]]; then
+        echo -e "${GRAY}Отменено${NC}"
+        press_enter
+        return
+    fi
+    
+    if [[ "$answer" != "y" && "$answer" != "Y" && "$answer" != "д" && "$answer" != "Д" ]]; then
+        echo -e "${GRAY}Отменено${NC}"
+        press_enter
+        return
+    fi
+    
+    echo ""
+    echo -e "${YELLOW}Скачиваю последнюю версию...${NC}"
+    
+    # Создаём резервную копию
+    if [ -f "$MESHTASTIC_INTERFACE_FILE" ]; then
+        cp "$MESHTASTIC_INTERFACE_FILE" "${MESHTASTIC_INTERFACE_FILE}.backup"
+        echo -e "${GRAY}Резервная копия создана: ${MESHTASTIC_INTERFACE_FILE}.backup${NC}"
+    fi
+    
+    # Скачиваем новую версию
+    local download_url="https://raw.githubusercontent.com/landandair/RNS_Over_Meshtastic/main/Interface/Meshtastic_Interface.py"
+    
+    if curl -s --connect-timeout 10 -o "/tmp/Meshtastic_Interface.py" "$download_url"; then
+        # Проверяем что файл не пустой и содержит Python код
+        if [ -s "/tmp/Meshtastic_Interface.py" ] && grep -q "class MeshtasticInterface" "/tmp/Meshtastic_Interface.py"; then
+            mv "/tmp/Meshtastic_Interface.py" "$MESHTASTIC_INTERFACE_FILE"
+            echo -e "${GREEN}✓ Файл успешно обновлён!${NC}"
+            echo ""
+            
+            echo -e "${YELLOW}Перезапустить Reticulum для применения? (y/n)${NC}"
+            read -r restart
+            if [[ "$restart" == "y" || "$restart" == "Y" || "$restart" == "д" || "$restart" == "Д" ]]; then
+                sudo systemctl restart reticulum.service
+                sleep 2
+                echo -e "${GREEN}✓ Reticulum перезапущен${NC}"
+            fi
+        else
+            echo -e "${RED}✗ Ошибка: скачанный файл повреждён${NC}"
+            rm -f "/tmp/Meshtastic_Interface.py"
+        fi
+    else
+        echo -e "${RED}✗ Ошибка скачивания. Проверь интернет-соединение.${NC}"
+    fi
+    
+    press_enter
+}
+
+restore_bridge_backup() {
+    echo ""
+    echo -e "${CYAN}═══ ВОССТАНОВЛЕНИЕ ИЗ BACKUP ═══${NC}"
+    echo ""
+    
+    local backup_file="${MESHTASTIC_INTERFACE_FILE}.backup"
+    
+    if [ ! -f "$backup_file" ]; then
+        echo -e "${RED}Backup файл не найден: $backup_file${NC}"
+        press_enter
+        return
+    fi
+    
+    local backup_date=$(stat -c %y "$backup_file" 2>/dev/null | cut -d'.' -f1)
+    echo -e "${WHITE}Найден backup от: ${YELLOW}$backup_date${NC}"
+    echo ""
+    
+    echo -e "${YELLOW}Восстановить из backup? (y/n, 0 = отмена)${NC}"
+    read -r answer
+    
+    if [[ "$answer" == "0" || "$answer" == "n" || "$answer" == "N" || "$answer" == "н" || "$answer" == "Н" ]]; then
+        echo -e "${GRAY}Отменено${NC}"
+        press_enter
+        return
+    fi
+    
+    if [[ "$answer" != "y" && "$answer" != "Y" && "$answer" != "д" && "$answer" != "Д" ]]; then
+        echo -e "${GRAY}Отменено${NC}"
+        press_enter
+        return
+    fi
+    
+    # Восстанавливаем
+    cp "$backup_file" "$MESHTASTIC_INTERFACE_FILE"
+    echo -e "${GREEN}✓ Файл восстановлен из backup!${NC}"
+    echo ""
+    
+    echo -e "${YELLOW}Перезапустить Reticulum для применения? (y/n)${NC}"
+    read -r restart
+    if [[ "$restart" == "y" || "$restart" == "Y" || "$restart" == "д" || "$restart" == "Д" ]]; then
+        sudo systemctl restart reticulum.service
+        sleep 2
+        echo -e "${GREEN}✓ Reticulum перезапущен${NC}"
+    fi
+    
+    press_enter
+}
+
+# ══════════════════════════════════════════════════════════════════
+# ПОДМЕНЮ: ОКРУЖЕНИЕ
+# ══════════════════════════════════════════════════════════════════
+
+menu_environment() {
+    while true; do
+        print_header
+        echo -e "${WHITE}${BOLD}  🔧 ОКРУЖЕНИЕ И НАСТРОЙКИ${NC}"
+        print_line
+        echo ""
+        
+        # Статус venv
+        if check_venv_active; then
+            echo -e "  ${GREEN}●${NC} Virtual Environment ${GREEN}[активен]${NC}"
+            echo -e "    ${GRAY}$VIRTUAL_ENV${NC}"
+        else
+            echo -e "  ${YELLOW}●${NC} Virtual Environment ${YELLOW}[не активен]${NC}"
+        fi
+        
+        # Статус SSH
+        local ssh_listen=$(ss -tlnp 2>/dev/null | grep ":${SSH_PORT}" | awk '{print $4}' | cut -d: -f1)
+        if [ "$ssh_listen" = "0.0.0.0" ]; then
+            echo -e "  ${GREEN}●${NC} SSH ${GREEN}[0.0.0.0:${SSH_PORT}]${NC}"
+        elif [ "$ssh_listen" = "127.0.0.1" ]; then
+            echo -e "  ${RED}●${NC} SSH ${RED}[127.0.0.1:${SSH_PORT} — только локально!]${NC}"
+        else
+            echo -e "  ${YELLOW}●${NC} SSH ${YELLOW}[неизвестно]${NC}"
+        fi
+        
+        echo ""
+        print_line
+        echo -e "  ${LIGHT_GREEN}[1]${NC} ${LIGHT_GREEN}Активировать venv${NC}"
+        echo -e "  ${LIGHT_BLUE}[2]${NC} ${LIGHT_BLUE}Перейти в рабочую папку${NC}"
+        echo -e "  ${LIGHT_CYAN}[3]${NC} ${LIGHT_CYAN}Проверить версии пакетов${NC}"
+        echo -e "  ${YELLOW}[4]${NC} ${YELLOW}Обновить пакеты Reticulum${NC}"
+        echo -e "  ${LIGHT_PURPLE}[5]${NC} ${LIGHT_PURPLE}Показать конфиг Reticulum${NC}"
+        echo -e "  ${ORANGE}[6]${NC} ${ORANGE}Редактировать конфиг Reticulum${NC}"
+        echo -e "  ${PINK}[7]${NC} 📡 ${PINK}Настройки RNode${NC}"
+        echo -e "  ${LIGHT_GREEN}[8]${NC} 🌉 ${LIGHT_GREEN}Мост Meshtastic${NC}"
+        echo -e "  ${LIGHT_RED}[9]${NC} 🔐 ${LIGHT_RED}Настройки SSH${NC}"
+        print_line
+        echo -e "  ${GRAY}[0]${NC} ${GRAY}← Назад / Enter${NC}"
+        echo ""
+        
+        echo -ne "${CYAN}Выбор: ${NC}"
+        local choice=$(read_key)
+        echo "$choice"
+        
+        # Проверяем ESC
+        if [[ "$choice" == "ESC" ]]; then
+            return
+        fi
+        
+        choice=$(convert_ru_to_en "$choice")
+        
+        case $choice in
+            1)
+                echo ""
+                echo -e "${CYAN}Для активации venv выполни:${NC}"
+                echo -e "${WHITE}source $VENV_PATH/bin/activate${NC}"
+                echo ""
+                echo -e "${GRAY}(скрипт не может активировать venv в родительском shell)${NC}"
+                press_enter
+                ;;
+            2)
+                echo ""
+                echo -e "${CYAN}Для перехода выполни:${NC}"
+                echo -e "${WHITE}cd $WORK_DIR${NC}"
+                press_enter
+                ;;
+            3)
+                echo ""
+                echo -e "${CYAN}═══ ВЕРСИИ ПАКЕТОВ ═══${NC}"
+                echo ""
+                "$VENV_PATH/bin/pip" list | grep -i -E "rns|nomad|lxmf|reticulum" 2>/dev/null || echo "Пакеты не найдены"
+                press_enter
+                ;;
+            4)
+                echo ""
+                echo -e "${YELLOW}Обновляю пакеты Reticulum...${NC}"
+                "$VENV_PATH/bin/pip" install --upgrade rns nomadnet lxmf
+                log_action "UPDATED: Reticulum packages"
+                press_enter
+                ;;
+            5)
+                echo ""
+                echo -e "${CYAN}═══ КОНФИГ RETICULUM ═══${NC}"
+                echo ""
+                if [ -f ~/.reticulum/config ]; then
+                    cat ~/.reticulum/config
+                else
+                    echo "Конфиг не найден в ~/.reticulum/config"
+                fi
+                press_enter
+                ;;
+            6)
+                if [ -f ~/.reticulum/config ]; then
+                    ${EDITOR:-nano} ~/.reticulum/config
+                else
+                    echo "Конфиг не найден"
+                    press_enter
+                fi
+                ;;
+            7)
+                menu_rnode_settings
+                ;;
+            8)
+                menu_meshtastic_bridge
+                ;;
+            9)
+                menu_ssh_settings
+                ;;
+            0) return ;;
+            q|Q) echo -e "\n${CYAN}Скрипт завершён.${NC}\n"; exit 0 ;;
+            *) ;;
+        esac
+    done
+}
+
+# ══════════════════════════════════════════════════════════════════
+# ПОДМЕНЮ: НАСТРОЙКИ SSH
+# ══════════════════════════════════════════════════════════════════
+
+menu_ssh_settings() {
+    while true; do
+        print_header
+        echo -e "${WHITE}${BOLD}  🔐 НАСТРОЙКИ SSH${NC}"
+        print_line
+        echo ""
+        
+        # Текущий статус
+        local ssh_port=$(grep "^Port" /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}')
+        local ssh_listen=$(ss -tlnp 2>/dev/null | grep ":${ssh_port:-22}" | awk '{print $4}' | cut -d: -f1)
+        local root_login=$(grep "^PermitRootLogin" /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}')
+        
+        echo -e "  ${WHITE}Порт:${NC} ${ssh_port:-22}"
+        if [ "$ssh_listen" = "0.0.0.0" ]; then
+            echo -e "  ${WHITE}Слушает:${NC} ${GREEN}0.0.0.0 (все интерфейсы)${NC}"
+        elif [ "$ssh_listen" = "127.0.0.1" ]; then
+            echo -e "  ${WHITE}Слушает:${NC} ${RED}127.0.0.1 (только локально!)${NC}"
+        else
+            echo -e "  ${WHITE}Слушает:${NC} ${YELLOW}$ssh_listen${NC}"
+        fi
+        echo -e "  ${WHITE}Root логин:${NC} ${root_login:-yes}"
+        
+        echo ""
+        print_line
+        echo -e "  ${LIGHT_GREEN}[1]${NC} 📝 ${LIGHT_GREEN}Редактировать sshd_config${NC}"
+        echo -e "  ${YELLOW}[2]${NC} 🔄 ${YELLOW}Перезапустить SSH${NC}"
+        echo -e "  ${LIGHT_CYAN}[3]${NC} 📜 ${LIGHT_CYAN}Показать статус sshd${NC}"
+        echo -e "  ${LIGHT_BLUE}[4]${NC} 🔍 ${LIGHT_BLUE}Показать текущие подключения${NC}"
+        print_line
+        echo -e "  ${GRAY}[0]${NC} ${GRAY}← Назад / Enter${NC}"
+        echo ""
+        
+        echo -ne "${CYAN}Выбор: ${NC}"
+        local choice=$(read_key)
+        echo "$choice"
+        
+        if [[ "$choice" == "ESC" ]] || [[ "$choice" == "0" ]]; then
+            return
+        fi
+        
+        choice=$(convert_ru_to_en "$choice")
+        
+        case $choice in
+            1)
+                echo ""
+                echo -e "${CYAN}═══ РЕДАКТИРОВАНИЕ sshd_config ═══${NC}"
+                echo ""
+                echo -e "${YELLOW}⚠ Важно: ListenAddress должен быть 0.0.0.0 для удалённого доступа${NC}"
+                echo -e "${GRAY}Если строка закомментирована (#) — слушает на всех интерфейсах${NC}"
+                echo ""
+                sleep 1
+                sudo nano /etc/ssh/sshd_config
+                echo ""
+                echo -e "${YELLOW}Перезапустить SSH для применения изменений? (y/n)${NC}"
+                read -r answer
+                if [[ "$answer" =~ ^[YyДд]$ ]]; then
+                    sudo systemctl restart sshd
+                    echo -e "${GREEN}✓ SSH перезапущен${NC}"
+                    sleep 1
+                fi
+                ;;
+            2)
+                echo ""
+                echo -e "${YELLOW}Перезапускаю SSH...${NC}"
+                sudo systemctl restart sshd
+                sleep 1
+                local new_listen=$(ss -tlnp 2>/dev/null | grep ":${ssh_port:-22}" | awk '{print $4}')
+                echo -e "${GREEN}✓ SSH перезапущен${NC}"
+                echo -e "  Слушает: ${WHITE}$new_listen${NC}"
+                press_enter
+                ;;
+            3)
+                echo ""
+                sudo systemctl status sshd
+                press_enter
+                ;;
+            4)
+                echo ""
+                echo -e "${CYAN}═══ ТЕКУЩИЕ SSH ПОДКЛЮЧЕНИЯ ═══${NC}"
+                echo ""
+                who | grep -v "^$" || echo "Нет активных подключений"
+                echo ""
+                echo -e "${GRAY}Детали:${NC}"
+                ss -tnp | grep ":${ssh_port:-22}" | head -10 || echo "Нет подключений"
+                press_enter
+                ;;
+            q|Q) echo -e "\n${CYAN}Скрипт завершён.${NC}\n"; exit 0 ;;
+            *) ;;
+        esac
+    done
+}
+
+# ══════════════════════════════════════════════════════════════════
+# ПОДМЕНЮ: МОНИТОРИНГ
+# ══════════════════════════════════════════════════════════════════
+
+menu_monitoring() {
+    while true; do
+        print_header
+        echo -e "${WHITE}${BOLD}  📊 МОНИТОРИНГ${NC}"
+        print_line
+        echo ""
+        echo -e "  ${LIGHT_GREEN}[1]${NC} ${LIGHT_GREEN}Статус всех сервисов${NC}"
+        echo -e "  ${LIGHT_CYAN}[2]${NC} ${LIGHT_CYAN}Общие логи Reticulum${NC}"
+        echo -e "  ${LIGHT_BLUE}[3]${NC} ${LIGHT_BLUE}Сетевые интерфейсы RNS${NC}"
+        echo -e "  ${LIGHT_PURPLE}[4]${NC} ${LIGHT_PURPLE}Подключённые пиры${NC}"
+        echo -e "  ${YELLOW}[5]${NC} ${YELLOW}Использование ресурсов${NC}"
+        echo -e "  ${ORANGE}[6]${NC} ${ORANGE}Лог действий скрипта${NC}"
+        print_line
+        echo -e "  ${PINK}[7]${NC} ${PINK}📋 messageboard${NC}"
+        echo -e "  ${LIGHT_CYAN}[8]${NC} ${LIGHT_CYAN}📄 Просмотр страниц узла${NC}"
+        print_line
+        echo -e "  ${GRAY}[0]${NC} ${GRAY}← Назад / Enter${NC}"
+        echo ""
+        
+        echo -ne "${CYAN}Выбор: ${NC}"
+        local choice=$(read_key)
+        echo "$choice"
+        
+        # Проверяем ESC
+        if [[ "$choice" == "ESC" ]]; then
+            return
+        fi
+        
+        choice=$(convert_ru_to_en "$choice")
+        
+        case $choice in
+            1) show_status ;;
+            2)
+                echo ""
+                echo -e "${CYAN}═══ ЛОГИ RETICULUM (Ctrl+C для выхода) ═══${NC}"
+                sudo journalctl -u reticulum.service -u nomadnet.service -f --no-pager -n 30
+                ;;
+            3)
+                echo ""
+                echo -e "${CYAN}═══ ИНТЕРФЕЙСЫ RNS ═══${NC}"
+                echo ""
+                "$VENV_PATH/bin/rnstatus" 2>/dev/null || echo "rnstatus не доступен"
+                press_enter
+                ;;
+            4)
+                echo ""
+                echo -e "${CYAN}═══ ПОДКЛЮЧЁННЫЕ ПИРЫ ═══${NC}"
+                echo ""
+                "$VENV_PATH/bin/rnpath" -t 2>/dev/null || echo "rnpath не доступен"
+                press_enter
+                ;;
+            5)
+                echo ""
+                echo -e "${CYAN}═══ ИСПОЛЬЗОВАНИЕ РЕСУРСОВ ═══${NC}"
+                echo ""
+                for service in "${SERVICES[@]}"; do
+                    local name="${SERVICE_NAMES[$service]:-$service}"
+                    local pid=$(systemctl show -p MainPID "$service" 2>/dev/null | cut -d= -f2)
+                    if [ "$pid" != "0" ] && [ -n "$pid" ]; then
+                        echo -e "${WHITE}$name (PID: $pid)${NC}"
+                        ps -p "$pid" -o %cpu,%mem,rss --no-headers 2>/dev/null | \
+                            awk '{printf "  CPU: %s%%  MEM: %s%%  RSS: %.1f MB\n", $1, $2, $3/1024}'
+                    fi
+                done
+                press_enter
+                ;;
+            6)
+                echo ""
+                echo -e "${CYAN}═══ ЛОГ ДЕЙСТВИЙ ═══${NC}"
+                echo ""
+                if [ -f "$LOG_FILE" ]; then
+                    tail -30 "$LOG_FILE"
+                else
+                    echo "Лог пока пуст"
+                fi
+                press_enter
+                ;;
+            7) menu_messageboard ;;
+            8) menu_pages ;;
+            0) return ;;
+            q|Q) echo -e "\n${CYAN}Скрипт завершён.${NC}\n"; exit 0 ;;
+            *) ;;
+        esac
+    done
+}
+
+# ══════════════════════════════════════════════════════════════════
+# ПОДМЕНЮ: ПРОСМОТР СТРАНИЦ УЗЛА
+# ══════════════════════════════════════════════════════════════════
+
+menu_pages() {
+    while true; do
+        print_header
+        echo -e "${WHITE}${BOLD}  📄 СТРАНИЦЫ УЗЛА${NC}"
+        print_line
+        echo ""
+        
+        # Список страниц
+        local pages=()
+        local i=1
+        for page in "$PAGES_PATH"/*.mu; do
+            if [ -f "$page" ]; then
+                local pagename=$(basename "$page")
+                pages+=("$page")
+                echo -e "  ${LIGHT_CYAN}[$i]${NC} ${LIGHT_CYAN}$pagename${NC}"
+                ((i++))
+            fi
+        done
+        
+        echo ""
+        print_line
+        echo -e "  ${GRAY}[0]${NC} ${GRAY}← Назад / Enter${NC}"
+        echo ""
+        
+        echo -ne "${CYAN}Выбор: ${NC}"
+        local choice=$(read_key)
+        echo "$choice"
+        
+        # Проверяем ESC
+        if [[ "$choice" == "ESC" ]]; then
+            return
+        fi
+        
+        choice=$(convert_ru_to_en "$choice")
+        
+        if [[ "$choice" == "0" ]]; then
+            return
+        elif [[ "$choice" =~ ^[qQ]$ ]]; then
+            echo -e "\n${CYAN}Скрипт завершён.${NC}\n"
+            exit 0
+        elif [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#pages[@]}" ]; then
+            local selected_page="${pages[$((choice-1))]}"
+            page_actions_menu "$selected_page"
+        fi
+    done
+}
+
+# Меню действий со страницей
+page_actions_menu() {
+    local page_path="$1"
+    local pagename=$(basename "$page_path")
+    
+    while true; do
+        print_header
+        echo -e "${WHITE}${BOLD}  📄 $pagename${NC}"
+        print_line
+        echo ""
+        echo -e "  ${LIGHT_CYAN}[1]${NC} 👁️  ${LIGHT_CYAN}Просмотр${NC}"
+        echo -e "  ${LIGHT_GREEN}[2]${NC} ✏️  ${LIGHT_GREEN}Редактировать (nano)${NC}"
+        print_line
+        echo -e "  ${GRAY}[ESC/0]${NC} ${GRAY}← Назад${NC}"
+        echo ""
+        
+        echo -ne "${CYAN}Выбор: ${NC}"
+        local choice=$(read_key)
+        echo "$choice"
+        
+        if [[ "$choice" == "ESC" ]] || [[ "$choice" == "0" ]]; then
+            return
+        fi
+        
+        choice=$(convert_ru_to_en "$choice")
+        
+        case $choice in
+            1) view_page_without_counter "$page_path" ;;
+            2) 
+                if verify_pin "редактировать страницу"; then
+                    edit_page "$page_path"
+                fi
+                ;;
+            *) ;;
+        esac
+    done
+}
+
+# Редактирование страницы
+edit_page() {
+    local page_path="$1"
+    local pagename=$(basename "$page_path")
+    
+    echo ""
+    echo -e "${CYAN}═══ РЕДАКТИРОВАНИЕ: $pagename ═══${NC}"
+    echo ""
+    echo -e "${YELLOW}⚠ Внимание: изменение страницы влияет на отображение в сети!${NC}"
+    echo -e "${GRAY}Открываю nano...${NC}"
+    echo -e "${GRAY}(Ctrl+O сохранить, Ctrl+X выход)${NC}"
+    sleep 1
+    
+    sudo nano "$page_path"
+    
+    echo ""
+    echo -e "${GREEN}✓ Редактирование завершено${NC}"
+    press_enter
+}
+
+# Просмотр страницы без увеличения счётчика
+view_page_without_counter() {
+    local page_path="$1"
+    local pagename=$(basename "$page_path")
+    
+    echo ""
+    echo -e "${CYAN}═══ $pagename ═══${NC}"
+    echo ""
+    
+    # Проверяем, является ли страница скриптом Python
+    if head -1 "$page_path" | grep -q "python"; then
+        # Для Python скриптов показываем исходный код
+        echo -e "${GRAY}(Python скрипт - показан исходный код)${NC}"
+        echo ""
+        cat "$page_path"
+    else
+        # Для обычных страниц показываем содержимое
+        cat "$page_path"
+    fi
+    
+    press_enter
+}
+
+# ══════════════════════════════════════════════════════════════════
+# УПРАВЛЕНИЕ ГРУППАМИ (созданными ботом)
+# ══════════════════════════════════════════════════════════════════
+
+# Получить имя группы из конфига
+get_group_display_name() {
+    local config_path="$1"
+    local name=""
+    
+    if [ -f "$config_path/config.cfg.owr" ]; then
+        name=$(grep "^display_name" "$config_path/config.cfg.owr" 2>/dev/null | head -1 | cut -d'=' -f2 | xargs)
+    fi
+    
+    if [ -z "$name" ] && [ -f "$config_path/config.cfg" ]; then
+        name=$(grep "^display_name" "$config_path/config.cfg" 2>/dev/null | head -1 | cut -d'=' -f2 | xargs)
+    fi
+    
+    if [ -z "$name" ]; then
+        name=$(basename "$config_path")
+    fi
+    
+    echo "$name"
+}
+
+# Получить сервис группы
+get_group_service() {
+    local config_path="$1"
+    local dir_name=$(basename "$config_path")
+    echo "${dir_name}.service"
+}
+
+# Получить хэш группы
+get_group_hash() {
+    local config_path="$1"
+    local identity_file="$config_path/identity"
+    
+    if [ -f "$identity_file" ]; then
+        "$VENV_PATH/bin/python3" -c "
+import RNS
+identity = RNS.Identity.from_file('$identity_file')
+h = RNS.Destination.hash(identity, 'lxmf', 'delivery')
+print(h.hex())
+" 2>/dev/null
+    fi
+}
+
+# Проверить приватная ли группа
+is_group_private() {
+    local config_path="$1"
+    local data_file="$config_path/data.cfg"
+    
+    if [ -f "$data_file" ]; then
+        grep -q "auto_add_user_type = wait" "$data_file" 2>/dev/null && return 0
+    fi
+    return 1
+}
+
+# Меню всех групп (только lxmf_group_*, без SURGUT GROUP)
+menu_all_groups() {
+    while true; do
+        print_header
+        echo -e "${WHITE}${BOLD}  👥 УПРАВЛЕНИЕ ГРУППАМИ${NC}"
+        echo -e "${GRAY}  (группы созданные ботом)${NC}"
+        print_line
+        echo ""
+        
+        local groups_arr=()
+        local groups_active=0
+        local i=1
+        
+        # Только lxmf_group_* — без lxmf_distribution_group_extended (SURGUT GROUP)
+        for dir in /root/.config/lxmf_group_*; do
+            if [ -d "$dir" ] && [ -f "$dir/identity" ]; then
+                groups_arr+=("$dir")
+                local name=$(get_group_display_name "$dir")
+                local service=$(get_group_service "$dir")
+                local status=$(get_service_status "$service")
+                local private_mark=""
+                
+                is_group_private "$dir" && private_mark=" 🔒"
+                
+                if [ "$status" = "active" ]; then
+                    echo -e "  ${GREEN}[$i]${NC} ${GREEN}●${NC} $name$private_mark"
+                    ((groups_active++))
+                else
+                    echo -e "  ${RED}[$i]${NC} ${RED}○${NC} $name$private_mark"
+                fi
+                ((i++))
+            fi
+        done
+        
+        if [ ${#groups_arr[@]} -eq 0 ]; then
+            echo -e "  ${GRAY}Групп не найдено${NC}"
+            echo -e "  ${GRAY}Создай через бота: /newgroup <название>${NC}"
+        else
+            echo ""
+            if [ $groups_active -eq ${#groups_arr[@]} ]; then
+                echo -e "  ${GREEN}Работает: ${groups_active}/${#groups_arr[@]}${NC}"
+            elif [ $groups_active -eq 0 ]; then
+                echo -e "  ${RED}Работает: ${groups_active}/${#groups_arr[@]}${NC}"
+            else
+                echo -e "  ${YELLOW}Работает: ${groups_active}/${#groups_arr[@]}${NC}"
+            fi
+        fi
+        
+        echo ""
+        print_line
+        echo -e "  ${LIGHT_GREEN}[a]${NC} ${LIGHT_GREEN}Запустить ВСЕ группы${NC}"
+        echo -e "  ${RED}[s]${NC} ${RED}Остановить ВСЕ группы${NC}"
+        echo -e "  ${YELLOW}[r]${NC} ${YELLOW}Перезапустить ВСЕ группы${NC}"
+        print_line
+        echo -e "  ${GRAY}[0]${NC} ${GRAY}← Назад / Enter${NC}"
+        echo ""
+        
+        echo -ne "${CYAN}Выбор: ${NC}"
+        local choice=$(read_key)
+        echo "$choice"
+        
+        if [[ "$choice" == "ESC" ]] || [[ "$choice" == "0" ]]; then
+            return
+        fi
+        
+        choice=$(convert_ru_to_en "$choice")
+        
+        case $choice in
+            [1-9])
+                local idx=$((choice - 1))
+                if [ $idx -lt ${#groups_arr[@]} ]; then
+                    menu_single_group_full "${groups_arr[$idx]}"
+                fi
+                ;;
+            a|A)
+                echo ""
+                echo -e "${YELLOW}Запускаю все группы...${NC}"
+                for dir in "${groups_arr[@]}"; do
+                    local service=$(get_group_service "$dir")
+                    start_service "$service"
+                done
+                press_enter
+                ;;
+            s|S)
+                if verify_pin "остановить ВСЕ группы"; then
+                    echo ""
+                    echo -e "${YELLOW}Останавливаю все группы...${NC}"
+                    for dir in "${groups_arr[@]}"; do
+                        local service=$(get_group_service "$dir")
+                        stop_service "$service"
+                    done
+                    press_enter
+                fi
+                ;;
+            r|R)
+                echo ""
+                echo -e "${YELLOW}Перезапускаю все группы...${NC}"
+                for dir in "${groups_arr[@]}"; do
+                    local service=$(get_group_service "$dir")
+                    restart_service "$service"
+                done
+                press_enter
+                ;;
+            q|Q) echo -e "\n${CYAN}Скрипт завершён.${NC}\n"; exit 0 ;;
+            *) ;;
+        esac
+    done
+}
+
+# Полное меню для одной группы
+menu_single_group_full() {
+    local config_path="$1"
+    local name=$(get_group_display_name "$config_path")
+    local service=$(get_group_service "$config_path")
+    local group_hash=$(get_group_hash "$config_path")
+    local private_mark=""
+    is_group_private "$config_path" && private_mark=" 🔒"
+    
+    while true; do
+        print_header
+        echo -e "${WHITE}${BOLD}  👥 $name$private_mark${NC}"
+        print_line
+        echo ""
+        print_service_status "$service"
+        echo ""
+        echo -e "  ${GRAY}LXMF: ${WHITE}$group_hash${NC}"
+        echo -e "  ${GRAY}Путь: ${WHITE}$config_path${NC}"
+        echo ""
+        print_line
+        echo -e "  ${GREEN}[1]${NC} ▶ ${GREEN}Запустить${NC}"
+        echo -e "  ${RED}[2]${NC} ■ ${RED}Остановить${NC}"
+        echo -e "  ${YELLOW}[3]${NC} ↻ ${YELLOW}Перезапустить${NC}"
+        echo -e "  ${LIGHT_CYAN}[4]${NC} 📜 ${LIGHT_CYAN}Показать логи${NC}"
+        echo -e "  ${LIGHT_BLUE}[5]${NC} ℹ️  ${LIGHT_BLUE}Подробный статус${NC}"
+        print_line
+        echo -e "  ${LIGHT_PURPLE}[6]${NC} 👥 ${LIGHT_PURPLE}Участники${NC}"
+        echo -e "  ${PINK}[7]${NC} ⏳ ${PINK}Ожидающие (wait)${NC}"
+        echo -e "  ${ORANGE}[8]${NC} 📊 ${ORANGE}Статистика${NC}"
+        print_line
+        echo -e "  ${LIGHT_RED}[d]${NC} 📝 ${LIGHT_RED}Редактировать data.cfg${NC}"
+        echo -e "  ${LIGHT_PURPLE}[c]${NC} ⚙️  ${LIGHT_PURPLE}Редактировать config.cfg${NC}"
+        echo -e "  ${YELLOW}[o]${NC} 📋 ${YELLOW}Редактировать config.cfg.owr${NC}"
+        print_line
+        echo -e "  ${PURPLE}[n]${NC} 📢 ${PURPLE}Анонсировать${NC}"
+        print_line
+        echo -e "  ${GRAY}[0]${NC} ${GRAY}← Назад / Enter${NC}"
+        echo ""
+        
+        echo -ne "${CYAN}Выбор: ${NC}"
+        local choice=$(read_key)
+        echo "$choice"
+        
+        if [[ "$choice" == "ESC" ]] || [[ "$choice" == "0" ]]; then
+            return
+        fi
+        
+        choice=$(convert_ru_to_en "$choice")
+        
+        case $choice in
+            1) start_service "$service"; press_enter ;;
+            2) 
+                if verify_pin "остановить $name"; then
+                    stop_service "$service"
+                    press_enter
+                fi
+                ;;
+            3) restart_service "$service"; press_enter ;;
+            4)
+                echo ""
+                echo -e "${CYAN}═══ ЛОГИ: $name (Ctrl+C для выхода) ═══${NC}"
+                sudo journalctl -u "$service" -f --no-pager -n 50
+                ;;
+            5)
+                echo ""
+                sudo systemctl status "$service"
+                press_enter
+                ;;
+            6) show_group_members_generic "$config_path" ;;
+            7) show_group_wait_list "$config_path" ;;
+            8) show_group_stats_generic "$config_path" "$service" ;;
+            d|D)
+                if verify_pin "редактировать data.cfg"; then
+                    edit_group_file_generic "$config_path/data.cfg" "data.cfg"
+                fi
+                ;;
+            c|C)
+                if verify_pin "редактировать config.cfg"; then
+                    edit_group_file_generic "$config_path/config.cfg" "config.cfg"
+                fi
+                ;;
+            o|O)
+                if verify_pin "редактировать config.cfg.owr"; then
+                    edit_group_file_generic "$config_path/config.cfg.owr" "config.cfg.owr"
+                fi
+                ;;
+            n|N)
+                echo ""
+                echo -e "${YELLOW}Отправляю анонс...${NC}"
+                local svc=$(get_group_service "$config_path")
+                # Включаем announce_startup
+                sed -i 's/announce_startup = No/announce_startup = Yes/' "$config_path/config.cfg"
+                sed -i 's/announce_startup = No/announce_startup = Yes/' "$config_path/config.cfg.owr" 2>/dev/null
+                # Перезапускаем группу
+                sudo systemctl restart "$svc"
+                sleep 3
+                # Возвращаем обратно
+                sed -i 's/announce_startup = Yes/announce_startup = No/' "$config_path/config.cfg"
+                sed -i 's/announce_startup = Yes/announce_startup = No/' "$config_path/config.cfg.owr" 2>/dev/null
+                echo -e "${GREEN}✓ Анонс отправлен!${NC}"
+                press_enter
+                ;;
+            q|Q) echo -e "\n${CYAN}Скрипт завершён.${NC}\n"; exit 0 ;;
+            *) ;;
+        esac
+    done
+}
+
+# Редактирование файла группы (универсальная функция)
+edit_group_file_generic() {
+    local file_path="$1"
+    local file_name="$2"
+    
+    echo ""
+    echo -e "${CYAN}═══ РЕДАКТИРОВАНИЕ: $file_name ═══${NC}"
+    echo ""
+    
+    if [ -f "$file_path" ]; then
+        local lines=$(wc -l < "$file_path")
+        local size=$(du -h "$file_path" | cut -f1)
+        echo -e "  📄 Файл: ${WHITE}$file_path${NC}"
+        echo -e "  📊 Строк: ${WHITE}$lines${NC}  Размер: ${WHITE}$size${NC}"
+        echo ""
+    else
+        echo -e "  ${RED}✗ Файл не найден!${NC}"
+        press_enter
+        return
+    fi
+    
+    echo -e "${GRAY}Открываю nano для редактирования...${NC}"
+    echo -e "${GRAY}(Ctrl+O сохранить, Ctrl+X выход)${NC}"
+    sleep 1
+    
+    sudo nano "$file_path"
+    
+    echo ""
+    echo -e "${GREEN}✓ Редактирование завершено${NC}"
+    echo -e "${YELLOW}Не забудь перезапустить группу для применения изменений!${NC}"
+    press_enter
+}
+
+# Участники группы (универсальная функция)
+show_group_members_generic() {
+    local config_path="$1"
+    local data_file="$config_path/data.cfg"
+    local name=$(get_group_display_name "$config_path")
+    
+    echo ""
+    echo -e "${CYAN}═══ УЧАСТНИКИ: $name ═══${NC}"
+    echo ""
+    
+    if [ -f "$data_file" ]; then
+        "$VENV_PATH/bin/python3" << PYEOF
+import configparser
+
+data_file = "$data_file"
+config = configparser.ConfigParser()
+config.read(data_file)
+
+total = 0
+
+if 'admin' in config.sections():
+    admins = dict(config['admin'])
+    if admins:
+        print("  \033[1;31m👑 АДМИНЫ:\033[0m")
+        for hash_addr, nick in admins.items():
+            nick = nick.strip() if nick.strip() else hash_addr[:16]
+            print(f"     \033[1;37m{nick}\033[0m")
+            print(f"     \033[0;90m{hash_addr}\033[0m")
+            total += 1
+        print()
+
+if 'mod' in config.sections():
+    mods = dict(config['mod'])
+    if mods:
+        print("  \033[1;35m🛡️ МОДЕРАТОРЫ:\033[0m")
+        for hash_addr, nick in mods.items():
+            nick = nick.strip() if nick.strip() else hash_addr[:16]
+            print(f"     \033[1;37m{nick}\033[0m")
+            print(f"     \033[0;90m{hash_addr}\033[0m")
+            total += 1
+        print()
+
+if 'user' in config.sections():
+    users = dict(config['user'])
+    if users:
+        print("  \033[1;32m👤 ПОЛЬЗОВАТЕЛИ:\033[0m")
+        for hash_addr, nick in users.items():
+            nick = nick.strip() if nick.strip() else hash_addr[:16]
+            print(f"     \033[1;37m{nick}\033[0m \033[0;90m[{hash_addr[:16]}...]\033[0m")
+            total += 1
+        print()
+
+if 'guest' in config.sections():
+    guests = dict(config['guest'])
+    if guests:
+        print("  \033[1;36m👁️ ГОСТИ (только чтение):\033[0m")
+        for hash_addr, nick in guests.items():
+            nick = nick.strip() if nick.strip() else hash_addr[:16]
+            print(f"     \033[0;90m{nick} [{hash_addr[:16]}...]\033[0m")
+            total += 1
+        print()
+
+for section in ['block_admin', 'block_mod', 'block_user', 'block_guest', 'block_wait']:
+    if section in config.sections():
+        blocked = dict(config[section])
+        if blocked:
+            print("  \033[0;31m🚫 ЗАБЛОКИРОВАНЫ:\033[0m")
+            for hash_addr, nick in blocked.items():
+                nick = nick.strip() if nick.strip() else hash_addr[:16]
+                print(f"     \033[0;90m{nick} [{hash_addr[:16]}...]\033[0m")
+            print()
+            break
+
+print(f"  \033[1;37mВсего участников: {total}\033[0m")
+PYEOF
+    else
+        echo -e "  ${RED}Файл данных не найден${NC}"
+    fi
+    
+    press_enter
+}
+
+# Список ожидающих (wait)
+show_group_wait_list() {
+    local config_path="$1"
+    local data_file="$config_path/data.cfg"
+    local name=$(get_group_display_name "$config_path")
+    
+    echo ""
+    echo -e "${CYAN}═══ ОЖИДАЮЩИЕ ОДОБРЕНИЯ: $name ═══${NC}"
+    echo ""
+    
+    if [ -f "$data_file" ]; then
+        "$VENV_PATH/bin/python3" << PYEOF
+import configparser
+
+data_file = "$data_file"
+config = configparser.ConfigParser()
+config.read(data_file)
+
+if 'wait' in config.sections():
+    wait_list = dict(config['wait'])
+    if wait_list:
+        print("  \033[1;33m⏳ ОЖИДАЮТ ОДОБРЕНИЯ:\033[0m")
+        print()
+        for i, (hash_addr, nick) in enumerate(wait_list.items(), 1):
+            nick = nick.strip() if nick.strip() else "Без имени"
+            print(f"  {i}. \033[1;37m{nick}\033[0m")
+            print(f"     \033[0;90m{hash_addr}\033[0m")
+            print()
+        print(f"  \033[0;33mВсего ожидают: {len(wait_list)}\033[0m")
+        print()
+        print("  \033[0;90mДля одобрения в группе: /allow <hash>\033[0m")
+        print("  \033[0;90mДля отклонения: /deny <hash>\033[0m")
+    else:
+        print("  \033[0;32m✓ Нет ожидающих\033[0m")
+else:
+    print("  \033[0;32m✓ Нет ожидающих\033[0m")
+PYEOF
+    else
+        echo -e "  ${RED}Файл данных не найден${NC}"
+    fi
+    
+    press_enter
+}
+
+# Статистика группы (универсальная)
+show_group_stats_generic() {
+    local config_path="$1"
+    local service="$2"
+    local name=$(get_group_display_name "$config_path")
+    local data_file="$config_path/data.cfg"
+    local stat_file="$config_path/statistic.cfg"
+    
+    echo ""
+    echo -e "${CYAN}═══ СТАТИСТИКА: $name ═══${NC}"
+    echo ""
+    
+    local group_hash=$(get_group_hash "$config_path")
+    echo -e "  ${WHITE}📛 Название:${NC} $name"
+    echo -e "  ${WHITE}🔗 LXMF:${NC} $group_hash"
+    
+    if is_group_private "$config_path"; then
+        echo -e "  ${WHITE}🔒 Тип:${NC} Приватная (wait)"
+    else
+        echo -e "  ${WHITE}🌐 Тип:${NC} Публичная"
+    fi
+    echo ""
+    
+    if [ -f "$data_file" ]; then
+        "$VENV_PATH/bin/python3" << PYEOF
+import configparser
+
+data_file = "$data_file"
+config = configparser.ConfigParser()
+config.read(data_file)
+
+admins = len(dict(config['admin'])) if 'admin' in config.sections() else 0
+mods = len(dict(config['mod'])) if 'mod' in config.sections() else 0
+users = len(dict(config['user'])) if 'user' in config.sections() else 0
+guests = len(dict(config['guest'])) if 'guest' in config.sections() else 0
+wait = len(dict(config['wait'])) if 'wait' in config.sections() else 0
+
+print(f"  👑 Админов: {admins}")
+print(f"  🛡️ Модераторов: {mods}")
+print(f"  👤 Пользователей: {users}")
+print(f"  👁️ Гостей: {guests}")
+print(f"  ⏳ Ожидают: {wait}")
+print(f"  ─────────────────")
+print(f"  📊 Всего: {admins + mods + users + guests}")
+PYEOF
+    fi
+    
+    echo ""
+    
+    if [ -f "$stat_file" ]; then
+        echo -e "  ${WHITE}📨 Статистика сообщений:${NC}"
+        "$VENV_PATH/bin/python3" << PYEOF
+import configparser
+
+stat_file = "$stat_file"
+config = configparser.ConfigParser()
+config.read(stat_file)
+
+if 'main' in config.sections():
+    main = config['main']
+    rx = main.get('rx_count', '0')
+    tx = main.get('tx_count', '0')
+    print(f"     Получено: {rx}")
+    print(f"     Отправлено: {tx}")
+PYEOF
+    fi
+    
+    echo ""
+    
+    local pid=$(systemctl show -p MainPID "$service" 2>/dev/null | cut -d= -f2)
+    if [ "$pid" != "0" ] && [ -n "$pid" ]; then
+        echo -e "  ${GRAY}Ресурсы (PID: $pid):${NC}"
+        ps -p "$pid" -o %cpu,%mem,rss --no-headers 2>/dev/null | \
+            awk '{printf "  CPU: %s%%  MEM: %s%%  RAM: %.1f MB\n", $1, $2, $3/1024}'
+    fi
+    
+    press_enter
+}
+
+# Удаление сообщения с доски
+delete_board_message() {
+    echo ""
+    echo -e "${CYAN}═══ УДАЛЕНИЕ СООБЩЕНИЯ ═══${NC}"
+    echo ""
+    
+    if [ ! -f "$BOARD_PATH" ]; then
+        echo -e "${RED}Файл доски не найден${NC}"
+        press_enter
+        return
+    fi
+    
+    # Показываем сообщения с номерами
+    "$VENV_PATH/bin/python3" << 'PYEOF'
+import RNS.vendor.umsgpack as msgpack
+
+board_path = "/root/.nomadmb/storage/board"
+
+try:
+    with open(board_path, 'rb') as f:
+        messages = msgpack.unpack(f)
+    
+    if not messages:
+        print("Доска пуста")
+    else:
+        print(f"Всего сообщений: {len(messages)}\n")
+        for i, msg in enumerate(messages, 1):
+            clean = msg.replace('`F888', '').replace('`Fddd', '').replace('`Fd8f', '').replace('`f', '')
+            preview = clean[:80] + "..." if len(clean) > 80 else clean
+            print(f"  [{i}] {preview}")
+except Exception as e:
+    print(f"Ошибка: {e}")
+PYEOF
+
+    echo ""
+    echo -ne "${WHITE}Номер сообщения для удаления (0 = отмена): ${NC}"
+    read msg_num
+    
+    if [ "$msg_num" == "0" ] || [ -z "$msg_num" ]; then
+        echo -e "${GRAY}Отменено${NC}"
+        press_enter
+        return
+    fi
+    
+    # Удаляем сообщение
+    "$VENV_PATH/bin/python3" << PYEOF
+import RNS.vendor.umsgpack as msgpack
+
+board_path = "/root/.nomadmb/storage/board"
+msg_num = $msg_num
+
+try:
+    with open(board_path, 'rb') as f:
+        messages = msgpack.unpack(f)
+    
+    if msg_num < 1 or msg_num > len(messages):
+        print(f"\033[0;31mНеверный номер. Доступно: 1-{len(messages)}\033[0m")
+    else:
+        deleted = messages.pop(msg_num - 1)
+        with open(board_path, 'wb') as f:
+            msgpack.pack(messages, f)
+        clean = deleted.replace('`F888', '').replace('`Fddd', '')[:50]
+        print(f"\033[0;32m✓ Сообщение #{msg_num} удалено: {clean}...\033[0m")
+except Exception as e:
+    print(f"\033[0;31mОшибка: {e}\033[0m")
+PYEOF
+    
+    press_enter
+}
+
+# ══════════════════════════════════════════════════════════════════
+# ПОДМЕНЮ: ДОСКА ОБЪЯВЛЕНИЙ
+# ══════════════════════════════════════════════════════════════════
+
+menu_messageboard() {
+    while true; do
+        print_header
+        echo -e "${WHITE}${BOLD}  📋 ДОСКА ОБЪЯВЛЕНИЙ${NC}"
+        print_line
+        echo ""
+        print_service_status "messageboard.service"
+        echo ""
+        print_line
+        echo -e "  ${GREEN}[1]${NC} ▶ ${GREEN}Запустить${NC}"
+        echo -e "  ${RED}[2]${NC} ■ ${RED}Остановить${NC}"
+        echo -e "  ${YELLOW}[3]${NC} ↻ ${YELLOW}Перезапустить${NC}"
+        echo -e "  ${LIGHT_CYAN}[4]${NC} 📜 ${LIGHT_CYAN}Показать логи${NC}"
+        echo -e "  ${LIGHT_BLUE}[5]${NC} 📝 ${LIGHT_BLUE}Просмотреть сообщения${NC}"
+        echo -e "  ${LIGHT_PURPLE}[6]${NC} 📊 ${LIGHT_PURPLE}Статистика${NC}"
+        echo -e "  ${RED}[7]${NC} 🗑️  ${RED}Удалить сообщение${NC}"
+        echo -e "  ${CYAN}[8]${NC} 📢 ${CYAN}Принудительный анонс${NC}"
+        echo -e "  ${RED}[9]${NC} 🚫 ${RED}Block адрес${NC}"
+        echo -e "  ${GREEN}[10]${NC} ✅ ${GREEN}Unblock адрес${NC}"
+        print_line
+        echo -e "  ${GRAY}[0]${NC} ${GRAY}← Назад / Enter${NC}"
+        echo ""
+        
+        echo -ne "${CYAN}Выбор: ${NC}"
+        read -r choice
+        
+        # Проверяем Enter
+        if [[ -z "$choice" ]]; then
+            return
+        fi
+        # Проверяем ESC (первый символ)
+        if [[ "${choice:0:1}" == $'\e' ]]; then
+            return
+        fi
+        
+        choice=$(convert_ru_to_en "$choice")
+        
+        case $choice in
+            1)
+                start_service "messageboard.service"
+                press_enter
+                ;;
+            2)
+                if verify_pin "остановить messageboard"; then
+                    stop_service "messageboard.service"
+                    press_enter
+                fi
+                ;;
+            3)
+                restart_service "messageboard.service"
+                press_enter
+                ;;
+            4)
+                echo ""
+                echo -e "${CYAN}═══ ЛОГИ ДОСКИ (Ctrl+C для выхода) ═══${NC}"
+                echo ""
+                sudo journalctl -u messageboard.service -f --no-pager -n 50
+                ;;
+            5)
+                echo ""
+                echo -e "${CYAN}═══ СООБЩЕНИЯ НА ДОСКЕ ═══${NC}"
+                echo ""
+                if [ -f "$BOARD_PATH" ]; then
+                    "$VENV_PATH/bin/python3" -c "
+import RNS.vendor.umsgpack as msgpack
+try:
+    with open('$BOARD_PATH', 'rb') as f:
+        messages = msgpack.unpack(f)
+    if messages:
+        print(f'Всего сообщений: {len(messages)}\n')
+        for i, msg in enumerate(messages[-10:], 1):
+            clean = msg.replace('\`F888', '').replace('\`Fddd', '').replace('\`Fd8f', '').replace('\`f', '')
+            print(f'{i}. {clean[:100]}...' if len(clean) > 100 else f'{i}. {clean}')
+    else:
+        print('Доска пуста')
+except Exception as e:
+    print(f'Ошибка чтения: {e}')
+" 2>/dev/null || echo "Не удалось прочитать доску"
+                else
+                    echo "Файл доски не найден: $BOARD_PATH"
+                fi
+                press_enter
+                ;;
+            6)
+                echo ""
+                echo -e "${CYAN}═══ СТАТИСТИКА ДОСКИ ═══${NC}"
+                echo ""
+                local pid=$(systemctl show -p MainPID messageboard.service 2>/dev/null | cut -d= -f2)
+                if [ "$pid" != "0" ] && [ -n "$pid" ]; then
+                    echo -e "${WHITE}📋 Доска объявлений (PID: $pid)${NC}"
+                    ps -p "$pid" -o %cpu,%mem,rss --no-headers 2>/dev/null | \
+                        awk '{printf "  CPU: %s%%  MEM: %s%%  RSS: %.1f MB\n", $1, $2, $3/1024}'
+                    echo ""
+                fi
+                if [ -f "$BOARD_PATH" ]; then
+                    local msg_count=$("$VENV_PATH/bin/python3" -c "
+import RNS.vendor.umsgpack as msgpack
+with open('$BOARD_PATH', 'rb') as f:
+    print(len(msgpack.unpack(f)))
+" 2>/dev/null || echo "0")
+                    echo -e "  Сообщений на доске: ${WHITE}$msg_count${NC}"
+                    local board_size=$(du -h "$BOARD_PATH" 2>/dev/null | cut -f1)
+                    echo -e "  Размер файла: ${WHITE}$board_size${NC}"
+                fi
+                press_enter
+                ;;
+            7)
+                if verify_pin "удалить сообщение"; then
+                    delete_board_message
+                fi
+                ;;
+            8)
+                echo ""
+                echo -e "${CYAN}📢 Принудительный анонс доски...${NC}"
+                rm -f ~/.nomadmb/storage/last_announce
+                restart_service "messageboard.service"
+                echo -e "${GREEN}✓ Анонс выполнен!${NC}"
+                press_enter
+                ;;
+            9)
+                if verify_pin "block"; then
+                    echo ""
+                    echo -ne "${CYAN}LXMF адрес для блокировки: ${NC}"
+                    read -r block_hash
+                    block_hash=$(echo "$block_hash" | tr -d "[:space:]" | sed "s/lxmf@//")
+                    if [ ${#block_hash} -eq 32 ]; then
+                        if grep -qx "$block_hash" ~/.nomadmb/storage/blocklist 2>/dev/null; then
+                            echo -e "${YELLOW}⚠ Адрес уже в блок-листе${NC}"
+                        else
+                            echo "$block_hash" >> ~/.nomadmb/storage/blocklist
+                            echo -e "${GREEN}✓ $block_hash заблокирован!${NC}"
+                        fi
+                    elif [ -z "$block_hash" ]; then
+                        echo -e "${RED}Адрес не указан${NC}"
+                    else
+                        echo -e "${RED}Неверный адрес (должно быть 32 символа hex)${NC}"
+                    fi
+                    press_enter
+                fi
+                ;;
+            10)
+                echo ""
+                echo -e "${CYAN}═══ ЗАБЛОКИРОВАННЫЕ ═══${NC}"
+                if [ -f ~/.nomadmb/storage/blocklist ]; then
+                    cat -n ~/.nomadmb/storage/blocklist
+                    echo ""
+                    echo -ne "${CYAN}Номер строки для разблокировки (0 = отмена): ${NC}"
+                    read -r line_num
+                    if [ "$line_num" != "0" ] && [ -n "$line_num" ]; then
+                        if verify_pin "unblock"; then
+                            sed -i "${line_num}d" ~/.nomadmb/storage/blocklist
+                            echo -e "${GREEN}✓ Разблокировано!${NC}"
+                        fi
+                    fi
+                else
+                    echo -e "${GRAY}Блок-лист пуст${NC}"
+                fi
+                press_enter
+                ;;
+            0) return ;;
+            q|Q) echo -e "\n${CYAN}Скрипт завершён.${NC}\n"; exit 0 ;;
+            *) ;;
+        esac
+    done
+}
+
+# ══════════════════════════════════════════════════════════════════
+# ГЛАВНОЕ МЕНЮ
+# ══════════════════════════════════════════════════════════════════
+
+main_menu() {
+    # Проверяем PIN только если запущен не из f2b
+    if [[ "$1" != "--skip-pin" ]]; then
+        if ! check_pin_exists; then
+            echo ""
+            echo -e "${YELLOW}PIN-код не установлен.${NC}"
+            echo -ne "${WHITE}Установить сейчас? (y/n): ${NC}"
+            read -r setup_now
+            if [[ "$setup_now" =~ ^[YyДд]$ ]]; then
+                setup_pin
+            fi
+        fi
+    fi
+    
+    while true; do
+        print_header
+        
+        # Быстрый статус сервисов
+        local active=0
+        for service in "${SERVICES[@]}"; do
+            [ "$(get_service_status "$service")" = "active" ] && ((active++))
+        done
+        
+        if [ $active -eq ${#SERVICES[@]} ]; then
+            echo -e "  ${GREEN}● Все сервисы работают (${active}/${#SERVICES[@]})${NC}"
+        elif [ $active -eq 0 ]; then
+            echo -e "  ${RED}● Все сервисы остановлены${NC}"
+        else
+            echo -e "  ${YELLOW}● Работает ${active}/${#SERVICES[@]} сервисов${NC}"
+        fi
+        
+        # Статус групп (lxmf_group_*)
+        local groups_total=0
+        local groups_active=0
+        for dir in /root/.config/lxmf_group_*; do
+            if [ -d "$dir" ] && [ -f "$dir/identity" ]; then
+                ((groups_total++))
+                local svc=$(basename "$dir").service
+                [ "$(get_service_status "$svc")" = "active" ] && ((groups_active++))
+            fi
+        done
+        
+        if [ $groups_total -gt 0 ]; then
+            if [ $groups_active -eq $groups_total ]; then
+                echo -e "  ${GREEN}● Группы: ${groups_active}/${groups_total}${NC}"
+            elif [ $groups_active -eq 0 ]; then
+                echo -e "  ${RED}● Группы: ${groups_active}/${groups_total}${NC}"
+            else
+                echo -e "  ${YELLOW}● Группы: ${groups_active}/${groups_total}${NC}"
+            fi
+        fi
+        
+        # Показываем статус PIN
+        if check_pin_exists; then
+            echo -e "  ${GRAY}🔐 PIN активен${NC}"
+        fi
+        
+        echo ""
+        print_line
+        echo -e "  ${LIGHT_GREEN}[1]${NC} 🚀 ${LIGHT_GREEN}Быстрый старт (запустить всё)${NC}"
+        echo -e "  ${LIGHT_BLUE}[2]${NC} 📡 ${LIGHT_BLUE}Сервисы Reticulum${NC}        →"
+        echo -e "  ${LIGHT_PURPLE}[3]${NC} 🤖 ${LIGHT_PURPLE}SurgutBot86${NC}              →"
+        echo -e "  ${ORANGE}[4]${NC} 🔧 ${ORANGE}Окружение и настройки${NC}    →"
+        echo -e "  ${LIGHT_CYAN}[5]${NC} 📊 ${LIGHT_CYAN}Мониторинг${NC}               →"
+        print_line
+        echo -e "  ${YELLOW}[6]${NC} 🔄 ${YELLOW}Перезапустить ВСЁ${NC}"
+        echo -e "  ${LIGHT_RED}[7]${NC} ⛔ ${LIGHT_RED}Остановить ВСЁ${NC}"
+        print_line
+        echo -e "  ${GRAY}[8]${NC} 🔐 ${GRAY}Настройка PIN${NC}"
+        echo -e "  ${RED}[9]${NC} 🛡️  ${RED}Fail2ban Manager (f2b)${NC}"
+        echo -e "  ${GRAY}[ESC/0]${NC} ${GRAY}Выход${NC}"
+        echo ""
+        
+        echo -ne "${CYAN}Выбор: ${NC}"
+        local choice=$(read_key)
+        echo "$choice"
+        
+        # Проверяем ESC
+        if [[ "$choice" == "ESC" ]] || [[ "$choice" == "0" ]]; then
+            echo -e "\n${CYAN}Скрипт завершён.${NC}\n"
+            exit 0
+        fi
+        
+        # Конвертируем русскую раскладку
+        choice=$(convert_ru_to_en "$choice")
+        
+        case $choice in
+            1) start_all ;;
+            2) menu_services ;;
+            3) menu_bot ;;
+            4) menu_environment ;;
+            5) menu_monitoring ;;
+            6) restart_all ;;
+            7) 
+                if verify_pin "остановить ВСЁ"; then
+                    stop_all
+                fi
+                ;;
+            8) menu_pin ;;
+            9) exec /usr/local/bin/f2b ;;
+            0|q|Q|exit) 
+                echo -e "\n${CYAN}Скрипт завершён.${NC}\n"
+                exit 0 
+                ;;
+            *) ;;
+        esac
+    done
+}
+
+# Меню настройки PIN
+menu_pin() {
+    while true; do
+        print_header
+        echo -e "${WHITE}${BOLD}  🔐 НАСТРОЙКА PIN${NC}"
+        print_line
+        echo ""
+        
+        if check_pin_exists; then
+            echo -e "  ${GREEN}● PIN установлен${NC}"
+        else
+            echo -e "  ${YELLOW}● PIN не установлен${NC}"
+        fi
+        
+        echo ""
+        print_line
+        echo -e "  ${LIGHT_GREEN}[1]${NC} ${LIGHT_GREEN}Установить/Изменить PIN${NC}"
+        echo -e "  ${LIGHT_RED}[2]${NC} ${LIGHT_RED}Удалить PIN${NC}"
+        print_line
+        echo -e "  ${GRAY}[ESC/0]${NC} ${GRAY}← Назад${NC}"
+        echo ""
+        
+        echo -ne "${CYAN}Выбор: ${NC}"
+        local choice=$(read_key)
+        echo "$choice"
+        
+        if [[ "$choice" == "ESC" ]] || [[ "$choice" == "0" ]]; then
+            return
+        fi
+        
+        case $choice in
+            1) change_pin ;;
+            2) reset_pin ;;
+            *) ;;
+        esac
+    done
+}
+
+# ══════════════════════════════════════════════════════════════════
+# БЫСТРЫЕ КОМАНДЫ (аргументы командной строки)
+# ══════════════════════════════════════════════════════════════════
+
+show_help() {
+    echo ""
+    echo -e "${CYAN}Reticulum Control${NC}"
+    echo ""
+    echo "Использование: rn [команда]"
+    echo ""
+    echo "Команды:"
+    echo "  (без аргументов)  Интерактивное меню"
+    echo "  status            Показать статус всех сервисов"
+    echo "  start             Запустить все сервисы"
+    echo "  stop              Остановить все сервисы"
+    echo "  restart           Перезапустить все сервисы"
+    echo "  logs              Показать логи (live)"
+    echo "  help              Эта справка"
+    echo ""
+}
+
+# ══════════════════════════════════════════════════════════════════
+# ТОЧКА ВХОДА
+# ══════════════════════════════════════════════════════════════════
+
+# Конвертируем аргумент если на русском
+arg=$(convert_ru_to_en "${1:-}")
+
+case "$arg" in
+    status)
+        for service in "${SERVICES[@]}"; do
+            print_service_status "$service"
+        done
+        ;;
+    start)
+        start_all
+        ;;
+    stop)
+        stop_all
+        ;;
+    restart)
+        restart_all
+        ;;
+    logs)
+        sudo journalctl -u reticulum.service -u nomadnet.service -u surgutbot86.service -u surgut_group.service -u messageboard.service -f --no-pager
+        ;;
+    help|--help|-h)
+        show_help
+        ;;
+    *)
+        main_menu "$1"
+        ;;
+esac

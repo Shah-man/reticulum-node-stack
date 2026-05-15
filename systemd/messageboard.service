@@ -1,0 +1,16 @@
+[Unit]
+Description=Surgut Message Board
+After=network.target reticulum.service
+Requires=reticulum.service
+
+[Service]
+RuntimeMaxSec=43200
+Type=simple
+User=root
+WorkingDirectory=/home/user/reticulum
+ExecStart=/home/user/reticulum/venv/bin/python3 /home/user/reticulum/messageboard.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
