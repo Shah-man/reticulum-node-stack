@@ -43,40 +43,64 @@ KNOWLEDGE_DIR = "/home/user/ollama-bot/knowledge"
 TOPICS_FILE = "/home/user/ollama-bot/knowledge/topics.json"
 FILES_PATH = "/home/user/ollama-bot/knowledge/files"
 
-# Каталог доступных файлов: короткое_имя -> (файл, описание)
-FILE_CATALOG = {
+# Каталог устройств: короткое_имя -> (паттерн_в_имени_файла, описание)
+# Используется динамический поиск — апстрим может переименовать файлы
+# (rnode_xxx.zip → rnode_firmware_xxx.zip), бот всё равно найдёт.
+RNODE_DEVICES = {
     # Heltec
-    "t114": ("rnode_heltec_t114.zip", "Heltec T114 (nRF52840 + SX1262)"),
-    "lora32v2": ("rnode_heltec_lora32_v2.zip", "Heltec LoRa32 V2"),
-    "lora32v3": ("rnode_heltec_lora32_v3.zip", "Heltec LoRa32 V3"),
-    "heltec32v4": ("rnode_heltec32v4pa.zip", "Heltec V4 PA"),
+    "t114":             ("heltec_t114",        "Heltec T114 (nRF52840 + SX1262)"),
+    "lora32v2":         ("heltec_lora32_v2",   "Heltec LoRa32 V2"),
+    "lora32v3":         ("heltec_lora32_v3",   "Heltec LoRa32 V3"),
+    "heltec32v4":       ("heltec32v4pa",       "Heltec V4 PA"),
     # LilyGO
-    "tbeam": ("rnode_lilygo_tbeam.zip", "LilyGO T-Beam"),
-    "tbeam_supreme": ("rnode_tbeam_supreme.zip", "LilyGO T-Beam Supreme"),
-    "tbeam_sx1262": ("rnode_tbeam_sx1262.zip", "LilyGO T-Beam SX1262"),
-    "t3s3": ("rnode_lilygo_t3s3.zip", "LilyGO T3S3"),
-    "t3s3_sx127x": ("rnode_t3s3_sx127x.zip", "LilyGO T3S3 SX127x"),
-    "t3s3_sx1280": ("rnode_t3s3_sx1280_pa.zip", "LilyGO T3S3 SX1280 PA"),
-    "tdeck": ("rnode_tdeck.zip", "LilyGO T-Deck"),
-    "techo": ("rnode_techo.zip", "LilyGO T-Echo"),
+    "tbeam":            ("lilygo_tbeam",       "LilyGO T-Beam"),
+    "tbeam_supreme":    ("tbeam_supreme",      "LilyGO T-Beam Supreme"),
+    "tbeam_sx1262":     ("tbeam_sx1262",       "LilyGO T-Beam SX1262"),
+    "t3s3":             ("lilygo_t3s3",        "LilyGO T3S3"),
+    "t3s3_sx127x":      ("t3s3_sx127x",        "LilyGO T3S3 SX127x"),
+    "t3s3_sx1280":      ("t3s3_sx1280_pa",     "LilyGO T3S3 SX1280 PA"),
+    "tdeck":            ("tdeck",              "LilyGO T-Deck"),
+    "techo":            ("techo",              "LilyGO T-Echo"),
     # RAK
-    "rak4631": ("rnode_rak4631.zip", "RAK4631 (nRF52840 + SX1262)"),
+    "rak4631":          ("rak4631",            "RAK4631 (nRF52840 + SX1262)"),
     # LoRa32 варианты
-    "lora32v10": ("rnode_lora32v10.zip", "LoRa32 V1.0"),
-    "lora32v20": ("rnode_lora32v20.zip", "LoRa32 V2.0"),
-    "lora32v20_extled": ("rnode_lora32v20_extled.zip", "LoRa32 V2.0 ExtLED"),
-    "lora32v21": ("rnode_lora32v21.zip", "LoRa32 V2.1"),
-    "lora32v21_extled": ("rnode_lora32v21_extled.zip", "LoRa32 V2.1 ExtLED"),
-    "lora32v21_tcxo": ("rnode_lora32v21_tcxo.zip", "LoRa32 V2.1 TCXO"),
+    "lora32v10":        ("lora32v10",          "LoRa32 V1.0"),
+    "lora32v20":        ("lora32v20",          "LoRa32 V2.0"),
+    "lora32v20_extled": ("lora32v20_extled",   "LoRa32 V2.0 ExtLED"),
+    "lora32v21":        ("lora32v21",          "LoRa32 V2.1"),
+    "lora32v21_extled": ("lora32v21_extled",   "LoRa32 V2.1 ExtLED"),
+    "lora32v21_tcxo":   ("lora32v21_tcxo",     "LoRa32 V2.1 TCXO"),
     # Другие
-    "esp32": ("rnode_esp32_generic.zip", "ESP32 Generic"),
-    "feather": ("rnode_featheresp32.zip", "Adafruit Feather ESP32"),
-    "ng20": ("rnode_ng20.zip", "RNode NG20"),
-    "ng21": ("rnode_ng21.zip", "RNode NG21"),
-    "xiao": ("rnode_xiao_esp32s3.zip", "Seeed XIAO ESP32S3"),
-    # Документация
+    "esp32":            ("esp32_generic",      "ESP32 Generic"),
+    "feather":          ("featheresp32",       "Adafruit Feather ESP32"),
+    "ng20":             ("ng20",               "RNode NG20"),
+    "ng21":             ("ng21",               "RNode NG21"),
+    "xiao":             ("xiao_esp32s3",       "Seeed XIAO ESP32S3"),
+}
+
+# Отдельные статические файлы (не прошивки RNode)
+EXTRA_FILES = {
     "reticulum_ru": ("reticulum_manual_ru.pdf", "Reticulum Manual на русском (5 MB)"),
 }
+
+
+def find_firmware(pattern: str) -> str | None:
+    """
+    Ищет .zip-прошивку в FILES_PATH по паттерну.
+    Возвращает имя файла или None.
+    Совместимо с обоими форматами имён апстрима:
+      rnode_<pattern>.zip       (старый)
+      rnode_firmware_<pattern>.zip (новый)
+    """
+    pat = pattern.lower()
+    try:
+        for f in sorted(os.listdir(FILES_PATH)):
+            fl = f.lower()
+            if fl.endswith(".zip") and pat in fl:
+                return f
+    except FileNotFoundError:
+        pass
+    return None
 
 GITHUB_FIRMWARE_URL = "https://github.com/markqvist/RNode_Firmware/releases"
 
@@ -854,27 +878,43 @@ class AICog:
     @command(name="files")
     def files(self, ctx):
         """Список доступных файлов для скачивания."""
+        # Группировка устройств по семействам для красивого вывода
+        groups = [
+            ("— HELTEC —",   ["t114", "lora32v2", "lora32v3", "heltec32v4"]),
+            ("— LILYGO —",   ["tbeam", "tbeam_supreme", "tbeam_sx1262",
+                              "t3s3", "t3s3_sx127x", "t3s3_sx1280",
+                              "tdeck", "techo"]),
+            ("— RAK —",      ["rak4631"]),
+            ("— LORA32 —",   ["lora32v10", "lora32v20", "lora32v20_extled",
+                              "lora32v21", "lora32v21_extled", "lora32v21_tcxo"]),
+            ("— ДРУГИЕ —",   ["esp32", "feather", "ng20", "ng21", "xiao"]),
+        ]
+
         lines = ["Прошивки RNode и документация:\n"]
-        lines.append("— HELTEC —")
-        for key in ["t114", "lora32v2", "lora32v3", "heltec32v4"]:
-            if key in FILE_CATALOG:
-                lines.append(f"/get {key} — {FILE_CATALOG[key][1]}")
-        lines.append("\n— LILYGO —")
-        for key in ["tbeam", "tbeam_supreme", "tbeam_sx1262", "t3s3", "t3s3_sx127x", "t3s3_sx1280", "tdeck", "techo"]:
-            if key in FILE_CATALOG:
-                lines.append(f"/get {key} — {FILE_CATALOG[key][1]}")
-        lines.append("\n— RAK —")
-        lines.append(f"/get rak4631 — {FILE_CATALOG['rak4631'][1]}")
-        lines.append("\n— LORA32 —")
-        for key in ["lora32v10", "lora32v20", "lora32v20_extled", "lora32v21", "lora32v21_extled", "lora32v21_tcxo"]:
-            if key in FILE_CATALOG:
-                lines.append(f"/get {key} — {FILE_CATALOG[key][1]}")
-        lines.append("\n— ДРУГИЕ —")
-        for key in ["esp32", "feather", "ng20", "ng21", "xiao"]:
-            if key in FILE_CATALOG:
-                lines.append(f"/get {key} — {FILE_CATALOG[key][1]}")
-        lines.append("\n— ДОКУМЕНТАЦИЯ —")
-        lines.append(f"/get reticulum_ru — {FILE_CATALOG['reticulum_ru'][1]}")
+        missing = []
+
+        for title, keys in groups:
+            lines.append(title)
+            for key in keys:
+                if key not in RNODE_DEVICES:
+                    continue
+                pattern, desc = RNODE_DEVICES[key]
+                # Проверяем, есть ли файл на диске
+                if find_firmware(pattern):
+                    lines.append(f"/get {key} — {desc}")
+                else:
+                    missing.append(key)
+            lines.append("")
+
+        lines.append("— ДОКУМЕНТАЦИЯ —")
+        for key, (filename, desc) in EXTRA_FILES.items():
+            filepath = f"{FILES_PATH}/{filename}"
+            if os.path.exists(filepath):
+                lines.append(f"/get {key} — {desc}")
+
+        if missing:
+            lines.append(f"\n(не скачаны: {len(missing)} прошивок)")
+
         lines.append(f"\nGitHub: {GITHUB_FIRMWARE_URL}")
         ctx.reply("\n".join(lines))
 
@@ -884,26 +924,38 @@ class AICog:
         if not ctx.args:
             ctx.reply("Укажи имя файла: /get t114\nСписок файлов: /files")
             return
-        
+
         short_name = ctx.args[0].lower()
-        
-        if short_name not in FILE_CATALOG:
+
+        # 1. Прошивка RNode (динамический поиск)
+        if short_name in RNODE_DEVICES:
+            pattern, desc = RNODE_DEVICES[short_name]
+            filename = find_firmware(pattern)
+            if not filename:
+                ctx.reply(
+                    f"Прошивка '{short_name}' ({desc}) пока не скачана на сервер.\n"
+                    f"Админ обновит каталог. GitHub: {GITHUB_FIRMWARE_URL}"
+                )
+                return
+        # 2. Статический файл (документация и т.п.)
+        elif short_name in EXTRA_FILES:
+            filename, desc = EXTRA_FILES[short_name]
+        else:
             ctx.reply(f"Файл '{short_name}' не найден.\nСписок файлов: /files")
             return
-        
-        filename, desc = FILE_CATALOG[short_name]
+
         filepath = f"{FILES_PATH}/{filename}"
-        
+
         try:
             with open(filepath, "rb") as f:
                 data = f.read()
-            
+
             attachment = Attachment(
                 type=AttachmentType.FILE,
                 name=filename,
                 data=data
             )
-            
+
             self.bot.send_with_attachment(
                 ctx.sender,
                 f"Файл: {filename}\n{desc}",
