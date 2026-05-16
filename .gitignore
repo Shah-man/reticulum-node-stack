@@ -106,3 +106,6 @@ ollama-bot/knowledge/files/rnode_*.zip
 
 # Версия скачанных прошивок (генерируется fetch-rnode-firmware.sh)
 ollama-bot/knowledge/files/.firmware_version
+
+# Локальные бэкапы прошивок (генерируется fetch-rnode-firmware.sh)
+ollama-bot/knowledge/files/.old/
