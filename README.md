@@ -55,17 +55,9 @@ Extended LXMF distribution group server:
 
 ## Deployment
 
-1. Restore identity files from a private backup into the system paths:
-   - `/root/.reticulum/storage/`
-   - `/home/user/.reticulum/storage/`
-   - `/home/user/ollama-bot/config/identity`
-   - `/root/.nomadnetwork/storage/identity`
-   - `/root/.nomadmb/storage/identity`
-   - `/root/.config/lxmf_distribution_group_extended/identity`
-   - `/root/.config/lxmf_group_izbrannoe_private/identity`
-2. Place files from this repo into the appropriate system paths (see `docs/deployment.md`)
-3. Enable the systemd units
-4. Create the bot `.env` from `config.example.env`
+Full step-by-step deployment guide: **[`docs/deployment.md`](docs/deployment.md)**
+
+Covers system preparation, installing Reticulum, placing configs, setting up systemd units, first startup, identity restoration, and security hardening (fail2ban, SSH).
 
 ## Security
 
