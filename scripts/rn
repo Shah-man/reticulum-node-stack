@@ -36,12 +36,31 @@ ANNOUNCE_SERVICES=(
     "surgutbot86.service"
 )
 
-# Человекочитаемые имена
+# Динамическое чтение имён группы и бота
+get_group_name() {
+    local cfg="/root/.config/lxmf_distribution_group_extended/config.cfg.owr"
+    local name=""
+    if [[ -f "$cfg" ]]; then
+        name="$(grep -E '^\s*display_name\s*=' "$cfg" | head -n1 | cut -d= -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    fi
+    echo "${name:-LXMF Group}"
+}
+
+get_bot_name() {
+    local env="/home/user/ollama-bot/.env"
+    local name=""
+    if [[ -f "$env" ]]; then
+        name="$(grep -E '^\s*BOT_NAME\s*=' "$env" | head -n1 | cut -d= -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^"//;s/"$//')"
+    fi
+    echo "${name:-Bot}"
+}
+
 declare -A SERVICE_NAMES=(
     ["reticulum.service"]="🌐 Reticulum Stack"
     ["nomadnet.service"]="📡 NomadNet Node"
-    ["surgut_group.service"]="👥 SURGUT Group"
-    ["surgutbot86.service"]="🤖 SurgutBot86"
+    ["surgut_group.service"]="👥 $(get_group_name)"
+    ["lxmf_group.service"]="👥 $(get_group_name)"
+    ["surgutbot86.service"]="🤖 $(get_bot_name)"
     ["messageboard.service"]="📋 messageboard"
 )
 
@@ -483,8 +502,8 @@ menu_services() {
         print_line
         echo -e "  ${LIGHT_CYAN}[1]${NC} ${LIGHT_CYAN}Reticulum Stack${NC}"
         echo -e "  ${LIGHT_BLUE}[2]${NC} ${LIGHT_BLUE}NomadNet${NC}"
-        echo -e "  ${LIGHT_PURPLE}[3]${NC} ${LIGHT_PURPLE}SURGUT Group${NC}"
-        echo -e "  ${LIGHT_GREEN}[4]${NC} ${LIGHT_GREEN}SurgutBot86${NC}"
+        echo -e "  ${LIGHT_PURPLE}[3]${NC} ${LIGHT_PURPLE}$(get_group_name)${NC}"
+        echo -e "  ${LIGHT_GREEN}[4]${NC} ${LIGHT_GREEN}$(get_bot_name)${NC}"
         echo -e "  ${PINK}[5]${NC} ${PINK}messageboard${NC}"
         echo -e "  ${CYAN}[6]${NC} ${CYAN}Управление группами${NC}  →"
         print_line
@@ -4520,7 +4539,7 @@ main_menu() {
         print_line
         echo -e "  ${LIGHT_GREEN}[1]${NC} 🚀 ${LIGHT_GREEN}Быстрый старт (запустить всё)${NC}"
         echo -e "  ${LIGHT_BLUE}[2]${NC} 📡 ${LIGHT_BLUE}Сервисы Reticulum${NC}        →"
-        echo -e "  ${LIGHT_PURPLE}[3]${NC} 🤖 ${LIGHT_PURPLE}SurgutBot86${NC}              →"
+        echo -e "  ${LIGHT_PURPLE}[3]${NC} 🤖 ${LIGHT_PURPLE}$(get_bot_name)${NC}              →"
         echo -e "  ${ORANGE}[4]${NC} 🔧 ${ORANGE}Окружение и настройки${NC}    →"
         echo -e "  ${LIGHT_CYAN}[5]${NC} 📊 ${LIGHT_CYAN}Мониторинг${NC}               →"
         print_line
