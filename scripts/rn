@@ -1,7 +1,19 @@
 #!/bin/bash
-# Перезапускаем себя через sudo если запущены не от root
+
+# Скрипт требует прав root для управления systemd-сервисами, fail2ban и т.п.
+# Если запущен не от root — пытаемся повысить привилегии через sudo.
 if [ "$EUID" -ne 0 ]; then
-    exec sudo "$0" "$@"
+    if command -v sudo >/dev/null 2>&1; then
+        exec sudo "$0" "$@"
+    else
+        echo "ERROR: This script requires root privileges, but 'sudo' is not available."
+        echo ""
+        echo "Please run as root using one of these methods:"
+        echo "  su -                  (switch to root, then run: $0)"
+        echo "  su -c \"$0\"            (run once as root)"
+        echo ""
+        exit 1
+    fi
 fi
 # ╔═══════════════════════════════════════════════════════════════╗
 # ║                    RETICULUM CONTROL                          ║
