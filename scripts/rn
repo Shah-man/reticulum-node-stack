@@ -15,6 +15,24 @@ if [ "$EUID" -ne 0 ]; then
         exit 1
     fi
 fi
+
+# Динамическое определение пользователя Reticulum
+# Ищем юзера у которого есть ~/reticulum/venv (установленный стек)
+get_reticulum_user() {
+    local u
+    for u in /home/*; do
+        if [[ -d "$u/reticulum/venv" ]]; then
+            basename "$u"
+            return
+        fi
+    done
+    echo "user"  # fallback (для Alpha4090 если что-то нестандартное)
+}
+
+RET_USER="$(get_reticulum_user)"
+RET_HOME="/home/${RET_USER}/reticulum"
+BOT_HOME="/home/${RET_USER}/ollama-bot"
+
 # ╔═══════════════════════════════════════════════════════════════╗
 # ║                    RETICULUM CONTROL                          ║
 # ║         Управление всеми сервисами Reticulum сети             ║
@@ -28,18 +46,20 @@ fi
 # КОНФИГУРАЦИЯ
 # ══════════════════════════════════════════════════════════════════
 
-VENV_PATH="/home/user/reticulum/venv"
-WORK_DIR="/home/user/reticulum"
-LOG_FILE="/home/user/reticulum/logs/rn_control.log"
+VENV_PATH="${RET_HOME}/venv"
+WORK_DIR="${RET_HOME}"
+LOG_FILE="${RET_HOME}/logs/rn_control.log"
 PAGES_PATH="/root/.nomadnetwork/storage/pages"
 PIN_FILE="/root/.rn_pin"
 SSH_PORT=40904
 
 # Все сервисы (показываются в меню и считаются для статуса)
+# Кандидаты — массив фильтруется ниже, остаются только реально установленные юниты
 SERVICES=(
     "reticulum.service"
     "nomadnet.service"
     "surgut_group.service"
+    "lxmf_group.service"
     "surgutbot86.service"
     "messageboard.service"
 )
@@ -48,8 +68,24 @@ SERVICES=(
 ANNOUNCE_SERVICES=(
     "nomadnet.service"
     "surgut_group.service"
+    "lxmf_group.service"
     "surgutbot86.service"
 )
+
+# Фильтруем: оставляем только те юниты, которые реально установлены
+_filter_existing_units() {
+    local -n arr=$1
+    local filtered=()
+    local unit
+    for unit in "${arr[@]}"; do
+        if systemctl list-unit-files "$unit" --no-legend 2>/dev/null | grep -q "^$unit"; then
+            filtered+=("$unit")
+        fi
+    done
+    arr=("${filtered[@]}")
+}
+_filter_existing_units SERVICES
+_filter_existing_units ANNOUNCE_SERVICES
 
 # Динамическое чтение имён группы и бота
 get_group_name() {
@@ -62,7 +98,7 @@ get_group_name() {
 }
 
 get_bot_name() {
-    local env="/home/user/ollama-bot/.env"
+    local env="${BOT_HOME}/.env"
     local name=""
     if [[ -f "$env" ]]; then
         name="$(grep -E '^\s*BOT_NAME\s*=' "$env" | head -n1 | cut -d= -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^"//;s/"$//')"
@@ -84,7 +120,7 @@ BOARD_PATH="/root/.nomadmb/storage/board"
 
 # Пути к данным группы и бота
 GROUP_CONFIG="/root/.config/lxmf_distribution_group_extended"
-BOT_DATA="/home/user/ollama-bot/bot_data"
+BOT_DATA="${BOT_HOME}/bot_data"
 
 # ══════════════════════════════════════════════════════════════════
 # ЦВЕТА И ФОРМАТИРОВАНИЕ
@@ -1317,7 +1353,7 @@ launch_nomadnet_interactive() {
 
 # Редактирование базы знаний бота
 menu_knowledge_base() {
-    local kb_dir="/home/user/ollama-bot/knowledge"
+    local kb_dir="${BOT_HOME}/knowledge"
     local topics_file="$kb_dir/topics.json"
     
     while true; do
@@ -1433,7 +1469,7 @@ menu_knowledge_base() {
 
 # Редактирование кода бота (промпт и логика AI)
 edit_bot_code() {
-    local bot_file="/home/user/ollama-bot/cogs/ai.py"
+    local bot_file="${BOT_HOME}/cogs/ai.py"
     
     echo ""
     echo -e "${CYAN}═══ ПРОМПТ И ЛОГИКА БОТА ═══${NC}"
@@ -1466,7 +1502,7 @@ edit_bot_code() {
 
 # Редактирование настроек бота (.env)
 edit_bot_settings() {
-    local env_file="/home/user/ollama-bot/.env"
+    local env_file="${BOT_HOME}/.env"
     
     echo ""
     echo -e "${CYAN}═══ НАСТРОЙКИ БОТА (.env) ═══${NC}"
@@ -1513,7 +1549,7 @@ edit_bot_settings() {
 
 # Меню логов сообщений бота (УЛУЧШЕННАЯ ВЕРСИЯ)
 menu_bot_logs() {
-    local logs_dir="/home/user/ollama-bot/logs"
+    local logs_dir="${BOT_HOME}/logs"
     local msg_log="$logs_dir/messages.log"
     
     while true; do
@@ -1597,7 +1633,7 @@ menu_bot_logs() {
 
 # Показать список пользователей
 show_users_list() {
-    local msg_log="/home/user/ollama-bot/logs/messages.log"
+    local msg_log="${BOT_HOME}/logs/messages.log"
     
     while true; do
         print_header
@@ -1665,7 +1701,7 @@ show_users_list() {
 # Просмотр сообщений пользователя с пагинацией
 view_user_messages() {
     local user_hash="$1"
-    local msg_log="/home/user/ollama-bot/logs/messages.log"
+    local msg_log="${BOT_HOME}/logs/messages.log"
     local nick=$(get_user_nick "$user_hash")
     local page_size=20
     
@@ -1760,7 +1796,7 @@ view_user_messages() {
 
 # Поиск по нику
 search_by_nick() {
-    local msg_log="/home/user/ollama-bot/logs/messages.log"
+    local msg_log="${BOT_HOME}/logs/messages.log"
     
     echo ""
     echo -e "${CYAN}═══ ПОИСК ПО НИКУ ═══${NC}"
@@ -1826,7 +1862,7 @@ search_by_nick() {
 
 # Поиск по адресу
 search_by_address() {
-    local msg_log="/home/user/ollama-bot/logs/messages.log"
+    local msg_log="${BOT_HOME}/logs/messages.log"
     
     echo ""
     echo -e "${CYAN}═══ ПОИСК ПО АДРЕСУ ═══${NC}"
@@ -1899,7 +1935,7 @@ search_by_address() {
 
 # Показать все сообщения с пагинацией
 show_last_messages() {
-    local msg_log="/home/user/ollama-bot/logs/messages.log"
+    local msg_log="${BOT_HOME}/logs/messages.log"
     local page_size=20
     
     if [ ! -f "$msg_log" ]; then
@@ -1982,7 +2018,7 @@ show_last_messages() {
 
 # Просмотр логов админов с цветами и пагинацией
 view_admin_logs() {
-    local admin_log="/home/user/ollama-bot/logs/admin.log"
+    local admin_log="${BOT_HOME}/logs/admin.log"
     local page_size=20
     
     if [ ! -f "$admin_log" ]; then
@@ -2130,7 +2166,7 @@ view_log_file() {
 
 # Меню управления доверенными
 menu_trusted_users() {
-    local bot_db="/home/user/ollama-bot/bot_data"
+    local bot_db="${BOT_HOME}/bot_data"
     
     while true; do
         print_header
@@ -2224,7 +2260,7 @@ show_bot_commands() {
 
 # Добавление доверенного
 add_trusted_user() {
-    local bot_db="/home/user/ollama-bot/bot_data"
+    local bot_db="${BOT_HOME}/bot_data"
     
     echo ""
     echo -e "${CYAN}═══ ДОБАВЛЕНИЕ ДОВЕРЕННОГО ═══${NC}"
@@ -2285,7 +2321,7 @@ print(json.dumps(data))
 
 # Удаление доверенного
 remove_trusted_user() {
-    local bot_db="/home/user/ollama-bot/bot_data"
+    local bot_db="${BOT_HOME}/bot_data"
     
     echo ""
     echo -e "${CYAN}═══ УДАЛЕНИЕ ДОВЕРЕННОГО ═══${NC}"
@@ -2537,7 +2573,7 @@ menu_surgutbot() {
 
 # Просмотр чатов бота
 show_bot_chats() {
-    local bot_db="/home/user/ollama-bot/bot_data"
+    local bot_db="${BOT_HOME}/bot_data"
     
     while true; do
         print_header
@@ -2598,7 +2634,7 @@ show_bot_chats() {
 # Показать историю чата с пользователем (с автообновлением)
 show_chat_history() {
     local user_hash="$1"
-    local bot_db="/home/user/ollama-bot/bot_data"
+    local bot_db="${BOT_HOME}/bot_data"
     local paused=0
     
     # Получаем ник пользователя
@@ -2681,7 +2717,7 @@ show_bot_stats() {
     echo -e "${CYAN}═══ СТАТИСТИКА SURGUTBOT86 ═══${NC}"
     echo ""
     
-    local bot_db="/home/user/ollama-bot/bot_data"
+    local bot_db="${BOT_HOME}/bot_data"
     
     if [ -f "$bot_db" ]; then
         # Всего сообщений
