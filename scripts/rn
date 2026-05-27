@@ -87,6 +87,21 @@ _filter_existing_units() {
 _filter_existing_units SERVICES
 _filter_existing_units ANNOUNCE_SERVICES
 
+# Определяем какой юнит группы реально установлен в системе
+# (lxmf_group.service на новых установках, surgut_group.service на старых)
+_detect_group_service() {
+    local candidate
+    for candidate in "lxmf_group.service" "surgut_group.service"; do
+        if systemctl list-unit-files "$candidate" --no-legend 2>/dev/null | grep -q "^$candidate"; then
+            echo "$candidate"
+            return
+        fi
+    done
+    # Fallback: legacy name (на случай если юнит ещё не создан)
+    echo "surgut_group.service"
+}
+GROUP_SERVICE="$(_detect_group_service)"
+
 # Динамическое чтение имён группы и бота
 get_group_name() {
     local cfg="/root/.config/lxmf_distribution_group_extended/config.cfg.owr"
@@ -933,7 +948,7 @@ edit_surgut_config_cfg() {
 }
 
 menu_group() {
-    local service="surgut_group.service"
+    local service="$GROUP_SERVICE"
     local name="${SERVICE_NAMES[$service]}"
     local config_path="/root/.config/lxmf_distribution_group_extended"
     
@@ -1056,7 +1071,7 @@ send_group_message() {
         
         echo ""
         echo -e "${YELLOW}Останавливаю группу...${NC}"
-        systemctl stop surgut_group.service
+        systemctl stop "$GROUP_SERVICE"
         sleep 1
         
         echo -e "${YELLOW}Отправляю...${NC}"
@@ -1065,7 +1080,7 @@ send_group_message() {
         "$VENV_PATH/bin/python3" /tmp/send_group_msg.py
         
         echo -e "${YELLOW}Запускаю группу...${NC}"
-        systemctl start surgut_group.service
+        systemctl start "$GROUP_SERVICE"
         
         # Удаляем временный файл
         rm -f /tmp/group_message.txt 2>/dev/null
@@ -1307,7 +1322,7 @@ PYEOF
     echo ""
     
     # Ресурсы
-    local pid=$(systemctl show -p MainPID surgut_group.service 2>/dev/null | cut -d= -f2)
+    local pid=$(systemctl show -p MainPID "$GROUP_SERVICE" 2>/dev/null | cut -d= -f2)
     if [ "$pid" != "0" ] && [ -n "$pid" ]; then
         echo -e "  ${GRAY}Ресурсы (PID: $pid):${NC}"
         ps -p "$pid" -o %cpu,%mem,rss --no-headers 2>/dev/null | \
@@ -4720,7 +4735,7 @@ case "$arg" in
         restart_all
         ;;
     logs)
-        sudo journalctl -u reticulum.service -u nomadnet.service -u surgutbot86.service -u surgut_group.service -u messageboard.service -f --no-pager
+        sudo journalctl -u reticulum.service -u nomadnet.service -u surgutbot86.service -u "$GROUP_SERVICE" -u messageboard.service -f --no-pager
         ;;
     help|--help|-h)
         show_help
