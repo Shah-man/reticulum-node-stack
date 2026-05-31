@@ -33,8 +33,8 @@ Configurations (without identity files or runtime state):
 
 ### `nomadnet-pages/`
 Propagation node pages and shared files:
-- `pages/` — `.mu` micron pages (index, guide, board)
-- `files/` — shared files served by the node (Meshtastic interface, etc.)
+- `pages/` — `.mu` micron pages (index, board)
+- `files/` — shared files served by the node
 
 ### `messageboard/`
 A customized message board that attaches to the shared `rnsd` instance
