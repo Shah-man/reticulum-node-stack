@@ -4370,6 +4370,168 @@ PYEOF
     press_enter
 }
 
+# Экспорт доски (бэкап сообщений в файл)
+export_board() {
+    echo ""
+    echo -e "${CYAN}═══ ЭКСПОРТ ДОСКИ ═══${NC}"
+    echo ""
+
+    if [ ! -f "$BOARD_PATH" ]; then
+        echo -e "${YELLOW}Доска пуста — экспортировать нечего${NC}"
+        press_enter
+        return
+    fi
+
+    local count
+    count=$("$VENV_PATH/bin/python3" -c "
+import RNS.vendor.umsgpack as msgpack
+with open('$BOARD_PATH', 'rb') as f:
+    print(len(msgpack.unpack(f)))
+" 2>/dev/null || echo "?")
+
+    local backup_dir
+    backup_dir="$(dirname "$(dirname "$BOARD_PATH")")/backups"
+    local default_file="$backup_dir/board_backup_$(date +%Y%m%d_%H%M%S).msgpack"
+
+    echo -e "  Сообщений на доске: ${WHITE}$count${NC}"
+    echo ""
+    echo -e "${GRAY}Куда сохранить (Enter = по умолчанию):${NC}"
+    echo -e "${GRAY}  $default_file${NC}"
+    echo -ne "${WHITE}Путь: ${NC}"
+    read -r dest
+    dest="${dest/#\~/$HOME}"
+    [ -z "$dest" ] && dest="$default_file"
+
+    mkdir -p "$(dirname "$dest")" 2>/dev/null
+    if cp "$BOARD_PATH" "$dest" 2>/dev/null; then
+        echo ""
+        echo -e "${GREEN}✓ Доска сохранена:${NC}"
+        echo -e "  ${WHITE}$dest${NC}"
+        echo ""
+        echo -e "${GRAY}Скопируй файл на флешку или другую машину, например:${NC}"
+        echo -e "${GRAY}  scp '$dest' user@newhost:~/${NC}"
+    else
+        echo -e "${RED}✗ Не удалось сохранить в: $dest${NC}"
+    fi
+    press_enter
+}
+
+# Импорт доски (восстановление сообщений из файла)
+import_board() {
+    echo ""
+    echo -e "${CYAN}═══ ИМПОРТ ДОСКИ ═══${NC}"
+    echo ""
+    echo -e "${YELLOW}⚠ Импорт ЗАМЕНИТ текущую доску содержимым бэкапа.${NC}"
+    echo -e "${GRAY}  Текущая доска будет сохранена в .bak перед заменой.${NC}"
+    echo ""
+
+    local backup_dir
+    backup_dir="$(dirname "$(dirname "$BOARD_PATH")")/backups"
+
+    # Собираем доступные бэкапы (новые сверху)
+    local files=()
+    if [ -d "$backup_dir" ]; then
+        while IFS= read -r f; do
+            [ -n "$f" ] && files+=("$f")
+        done < <(ls -1t "$backup_dir"/*.msgpack 2>/dev/null)
+    fi
+
+    local src=""
+    if [ ${#files[@]} -gt 0 ]; then
+        echo -e "${WHITE}Найденные бэкапы в $backup_dir:${NC}"
+        echo ""
+        local i=1
+        for f in "${files[@]}"; do
+            local cnt sz mt
+            cnt=$("$VENV_PATH/bin/python3" -c "
+import RNS.vendor.umsgpack as msgpack
+with open('$f','rb') as fh: print(len(msgpack.unpack(fh)))
+" 2>/dev/null || echo "?")
+            sz=$(du -h "$f" 2>/dev/null | cut -f1)
+            mt=$(date -r "$f" '+%Y-%m-%d %H:%M' 2>/dev/null)
+            echo -e "  ${LIGHT_GREEN}[$i]${NC} $(basename "$f")"
+            echo -e "      ${GRAY}$mt · $sz · сообщений: $cnt${NC}"
+            i=$((i+1))
+        done
+        echo ""
+        echo -e "${GRAY}Введи номер бэкапа, либо свой путь к файлу (0 = отмена):${NC}"
+        echo -ne "${WHITE}Выбор: ${NC}"
+        read -r pick
+        pick="${pick/#\~/$HOME}"
+
+        if [ "$pick" == "0" ] || [ -z "$pick" ]; then
+            echo -e "${GRAY}Отменено${NC}"
+            press_enter
+            return
+        fi
+        if [[ "$pick" =~ ^[0-9]+$ ]] && [ "$pick" -ge 1 ] && [ "$pick" -le ${#files[@]} ]; then
+            src="${files[$((pick-1))]}"
+        else
+            src="$pick"
+        fi
+    else
+        echo -e "${GRAY}В $backup_dir бэкапов не найдено.${NC}"
+        echo -ne "${WHITE}Путь к файлу бэкапа (0 = отмена): ${NC}"
+        read -r src
+        src="${src/#\~/$HOME}"
+        if [ "$src" == "0" ] || [ -z "$src" ]; then
+            echo -e "${GRAY}Отменено${NC}"
+            press_enter
+            return
+        fi
+    fi
+
+    if [ ! -f "$src" ]; then
+        echo -e "${RED}Файл не найден: $src${NC}"
+        press_enter
+        return
+    fi
+
+    # Валидация: это читаемая msgpack-доска (список)?
+    local count
+    count=$("$VENV_PATH/bin/python3" -c "
+import RNS.vendor.umsgpack as msgpack, sys
+try:
+    with open('$src', 'rb') as f:
+        data = msgpack.unpack(f)
+    if not isinstance(data, list):
+        sys.exit(1)
+    print(len(data))
+except Exception:
+    sys.exit(1)
+" 2>/dev/null)
+    if [ -z "$count" ]; then
+        echo -e "${RED}✗ Файл не похож на доску (повреждён или неверный формат)${NC}"
+        press_enter
+        return
+    fi
+
+    echo ""
+    echo -e "  Сообщений в бэкапе: ${WHITE}$count${NC}"
+    echo -ne "${WHITE}Восстановить эту доску? (y/n): ${NC}"
+    read -r confirm
+    if [[ ! "$confirm" =~ ^[YyДд]$ ]]; then
+        echo -e "${GRAY}Отменено${NC}"
+        press_enter
+        return
+    fi
+
+    mkdir -p "$(dirname "$BOARD_PATH")" 2>/dev/null
+    if [ -f "$BOARD_PATH" ]; then
+        local bak="${BOARD_PATH}.bak.$(date +%Y%m%d_%H%M%S)"
+        cp "$BOARD_PATH" "$bak" && echo -e "${GRAY}Текущая доска сохранена: $bak${NC}"
+    fi
+
+    if cp "$src" "$BOARD_PATH"; then
+        echo -e "${GREEN}✓ Доска восстановлена ($count сообщений)${NC}"
+        echo -e "${GRAY}Перезапуск messageboard для применения...${NC}"
+        restart_service "messageboard.service"
+    else
+        echo -e "${RED}✗ Ошибка восстановления${NC}"
+    fi
+    press_enter
+}
+
 # ══════════════════════════════════════════════════════════════════
 # ПОДМЕНЮ: ДОСКА ОБЪЯВЛЕНИЙ
 # ══════════════════════════════════════════════════════════════════
@@ -4393,6 +4555,8 @@ menu_messageboard() {
         echo -e "  ${CYAN}[8]${NC} 📢 ${CYAN}Принудительный анонс${NC}"
         echo -e "  ${RED}[9]${NC} 🚫 ${RED}Block адрес${NC}"
         echo -e "  ${GREEN}[10]${NC} ✅ ${GREEN}Unblock адрес${NC}"
+        echo -e "  ${LIGHT_GREEN}[11]${NC} 💾 ${LIGHT_GREEN}Экспорт доски (бэкап)${NC}"
+        echo -e "  ${LIGHT_BLUE}[12]${NC} 📥 ${LIGHT_BLUE}Импорт доски (восстановить)${NC}"
         print_line
         echo -e "  ${GRAY}[0]${NC} ${GRAY}← Назад / Enter${NC}"
         echo ""
@@ -4453,7 +4617,7 @@ except Exception as e:
     print(f'Ошибка чтения: {e}')
 " 2>/dev/null || echo "Не удалось прочитать доску"
                 else
-                    echo "Файл доски не найден: $BOARD_PATH"
+                    echo -e "${GRAY}Доска пуста — сообщений пока нет${NC}"
                 fi
                 press_enter
                 ;;
@@ -4532,6 +4696,14 @@ with open('$BOARD_PATH', 'rb') as f:
                     echo -e "${GRAY}Блок-лист пуст${NC}"
                 fi
                 press_enter
+                ;;
+            11)
+                export_board
+                ;;
+            12)
+                if verify_pin "импортировать доску"; then
+                    import_board
+                fi
                 ;;
             0) return ;;
             q|Q) echo -e "\n${CYAN}Скрипт завершён.${NC}\n"; exit 0 ;;
