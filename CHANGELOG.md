@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] - 2026-06-01
+### Added
+- **`scripts/rn`** — automatic PyPI access recovery for package updates.
+  When the upstream PyPI host is unreachable (e.g. a CDN edge IP is blocked
+  at the network level), the script now detects the failure and transparently
+  cycles through a list of known-good Fastly edge IPs, writing the first
+  working one into `/etc/hosts` before retrying. This keeps the
+  "Update Reticulum packages" action working even when the default IP is
+  filtered.
+  - New helpers: `check_pypi_access()`, `fix_pypi_access()`,
+    `ensure_pypi_access()`, `clean_pypi_hosts()`.
+  - Reachability check uses `curl` with a `python3` fallback, so it works
+    even on minimal systems without `curl`.
+  - Fallback IP list is kept in a single `PYPI_FALLBACK_IPS` array for easy
+    maintenance if edge addresses change.
+  - New `[p] 🌐` entry in the environment/settings menu to check and repair
+    PyPI access manually, showing any current `/etc/hosts` overrides.
+### Changed
+- **`scripts/rn`** — the "Update Reticulum packages" action now runs the
+  PyPI reachability check first and only proceeds with `pip install` once
+  access is confirmed (or successfully repaired).
+
 ## [0.2.0] - 2026-05-16
 
 ### Changed

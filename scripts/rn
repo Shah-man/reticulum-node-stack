@@ -401,6 +401,92 @@ check_venv_active() {
 }
 
 # ══════════════════════════════════════════════════════════════════
+# ПРОВЕРКА И ФИКС ДОСТУПА К PYPI (обход блокировки Fastly IP)
+# ══════════════════════════════════════════════════════════════════
+
+# Список рабочих Fastly IP для pypi.org (на случай блокировки РКН)
+PYPI_FALLBACK_IPS=(
+    "151.101.0.223"
+    "151.101.64.223"
+    "151.101.128.223"
+    "151.101.192.223"
+)
+
+PYPI_HOSTS=("pypi.org" "files.pythonhosted.org")
+
+# Проверяет доступен ли pypi.org по HTTPS (таймаут 8 сек)
+# Использует curl, при его отсутствии — python из venv
+check_pypi_access() {
+    if command -v curl >/dev/null 2>&1; then
+        curl -sI https://pypi.org --connect-timeout 8 -o /dev/null 2>/dev/null && return 0
+        return 1
+    fi
+    # Fallback на python (venv всегда есть в этом окружении)
+    "$VENV_PATH/bin/python3" -c "
+import urllib.request, sys
+try:
+    urllib.request.urlopen('https://pypi.org/simple/', timeout=8)
+    sys.exit(0)
+except Exception:
+    sys.exit(1)
+" 2>/dev/null && return 0
+    return 1
+}
+
+# Удаляет записи pypi из /etc/hosts
+clean_pypi_hosts() {
+    sudo sed -i '/pypi\.org/d;/files\.pythonhosted\.org/d' /etc/hosts 2>/dev/null
+}
+
+# Подбирает рабочий Fastly IP и прописывает в /etc/hosts
+# Возвращает 0 если успех, 1 если ни один IP не сработал
+fix_pypi_access() {
+    echo -e "${YELLOW}⚠ pypi.org недоступен — подбираю рабочий IP...${NC}"
+
+    # Сначала чистим старые записи
+    clean_pypi_hosts
+
+    local ip
+    for ip in "${PYPI_FALLBACK_IPS[@]}"; do
+        echo -ne "  ${GRAY}Пробую ${ip}...${NC} "
+
+        # Временно прописываем IP
+        clean_pypi_hosts
+        local host
+        for host in "${PYPI_HOSTS[@]}"; do
+            echo "$ip $host" | sudo tee -a /etc/hosts >/dev/null
+        done
+
+        # Проверяем доступность (используем общую функцию)
+        if check_pypi_access; then
+            echo -e "${GREEN}✓ работает!${NC}"
+            log_action "PYPI FIX: using $ip"
+            return 0
+        else
+            echo -e "${RED}✗${NC}"
+        fi
+    done
+
+    # Ни один IP не сработал — убираем мусор из hosts
+    clean_pypi_hosts
+    echo -e "${RED}✗ Не удалось подобрать рабочий IP${NC}"
+    return 1
+}
+
+# Гарантирует доступ к pypi: проверяет, при необходимости чинит.
+# Возвращает 0 если доступ есть (или починили), 1 если нет.
+ensure_pypi_access() {
+    echo -ne "${GRAY}Проверяю доступ к pypi.org...${NC} "
+    if check_pypi_access; then
+        echo -e "${GREEN}✓${NC}"
+        return 0
+    fi
+    echo -e "${YELLOW}недоступен${NC}"
+    fix_pypi_access
+    return $?
+}
+
+# ══════════════════════════════════════════════════════════════════
 # ФУНКЦИИ УПРАВЛЕНИЯ СЕРВИСАМИ
 # ══════════════════════════════════════════════════════════════════
 
@@ -3391,6 +3477,7 @@ menu_environment() {
         echo -e "  ${PINK}[7]${NC} 📡 ${PINK}Настройки RNode${NC}"
         echo -e "  ${LIGHT_GREEN}[8]${NC} 🌉 ${LIGHT_GREEN}Мост Meshtastic${NC}"
         echo -e "  ${LIGHT_RED}[9]${NC} 🔐 ${LIGHT_RED}Настройки SSH${NC}"
+        echo -e "  ${LIGHT_CYAN}[p]${NC} 🌐 ${LIGHT_CYAN}Проверить/починить доступ к pypi${NC}"
         print_line
         echo -e "  ${GRAY}[0]${NC} ${GRAY}← Назад / Enter${NC}"
         echo ""
@@ -3431,8 +3518,17 @@ menu_environment() {
             4)
                 echo ""
                 echo -e "${YELLOW}Обновляю пакеты Reticulum...${NC}"
-                "$VENV_PATH/bin/pip" install --upgrade rns nomadnet lxmf
-                log_action "UPDATED: Reticulum packages"
+                echo ""
+                if ensure_pypi_access; then
+                    echo ""
+                    "$VENV_PATH/bin/pip" install --upgrade rns nomadnet lxmf
+                    log_action "UPDATED: Reticulum packages"
+                else
+                    echo ""
+                    echo -e "${RED}✗ Нет доступа к pypi.org${NC}"
+                    echo -e "${GRAY}Проверь интернет или попробуй позже.${NC}"
+                    echo -e "${GRAY}Можно также добавить новый IP в PYPI_FALLBACK_IPS в скрипте.${NC}"
+                fi
                 press_enter
                 ;;
             5)
@@ -3462,6 +3558,29 @@ menu_environment() {
                 ;;
             9)
                 menu_ssh_settings
+                ;;
+            p|P)
+                echo ""
+                echo -e "${CYAN}═══ ДОСТУП К PYPI ═══${NC}"
+                echo ""
+                # Показываем текущие записи в hosts (если есть)
+                local cur_hosts
+                cur_hosts=$(grep -E "pypi\.org|files\.pythonhosted\.org" /etc/hosts 2>/dev/null)
+                if [ -n "$cur_hosts" ]; then
+                    echo -e "${GRAY}Текущие записи в /etc/hosts:${NC}"
+                    echo "$cur_hosts" | while read -r line; do
+                        echo -e "  ${WHITE}$line${NC}"
+                    done
+                    echo ""
+                fi
+                if ensure_pypi_access; then
+                    echo ""
+                    echo -e "${GREEN}✓ Доступ к pypi.org есть${NC}"
+                else
+                    echo ""
+                    echo -e "${RED}✗ Доступ к pypi.org отсутствует${NC}"
+                fi
+                press_enter
                 ;;
             0) return ;;
             q|Q) echo -e "\n${CYAN}Скрипт завершён.${NC}\n"; exit 0 ;;
