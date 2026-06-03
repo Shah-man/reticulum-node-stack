@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] - 2026-06-04
+### Fixed
+- **`scripts/rn`** — composing a message to a group now opens an editor, so
+  multi-line, multi-paragraph posts are delivered to members intact.
+  Previously the prompt read a single line, so only the first line of a
+  multi-paragraph post was sent.
+### Removed
+- **`scripts/rn`** — Meshtastic bridge management submenu and all of its
+  helpers (status, restart, logs, config, node info, traffic monitor, version
+  check, update, backup restore). The bridge deployment was already dropped
+  from the installer; this removes the now-orphaned management UI. The original
+  code remains available in git history if it is ever needed again.
 ## [0.6.0] - 2026-06-01
 ### Added
 - **`scripts/rn`** — automatic PyPI access recovery for package updates.
