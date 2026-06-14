@@ -137,6 +137,12 @@ BOARD_PATH="/root/.nomadmb/storage/board"
 GROUP_CONFIG="/root/.config/lxmf_distribution_group_extended"
 BOT_DATA="${BOT_HOME}/bot_data"
 
+# Пути вещателя (broadcaster) — служебный отправитель новостей в группу
+BROADCASTER_DIR="${RET_HOME}/rn_broadcaster"
+BROADCASTER_IDENTITY="${BROADCASTER_DIR}/identity"
+BROADCASTER_NAME="rn-broadcaster"
+BROADCASTER_BACKUP_KEEP=5
+
 # ══════════════════════════════════════════════════════════════════
 # ЦВЕТА И ФОРМАТИРОВАНИЕ
 # ══════════════════════════════════════════════════════════════════
@@ -1097,9 +1103,7 @@ menu_group() {
             7) show_group_pin ;;
             8) show_group_stats ;;
             9) 
-                if verify_pin "отправить сообщение"; then
-                    send_group_message
-                fi
+                send_message_menu
                 ;;
             d|D)
                 if verify_pin "редактировать data.cfg"; then
@@ -1121,6 +1125,408 @@ menu_group() {
             *) ;;
         esac
     done
+}
+
+# ══════════════════════════════════════════════════════════════════
+# ПОДМЕНЮ: ОТПРАВКА СООБЩЕНИЯ / ВЕЩАТЕЛЬ
+# ══════════════════════════════════════════════════════════════════
+
+# Получить LXMF-хеш вещателя из его identity-файла
+get_broadcaster_hash() {
+    "$VENV_PATH/bin/rnid" -i "$BROADCASTER_IDENTITY" -H lxmf.delivery 2>/dev/null \
+        | grep -oiE "is <[0-9a-f]{32}>" | grep -oiE "[0-9a-f]{32}" | head -1
+}
+
+# Подменю «Отправить сообщение»
+send_message_menu() {
+    while true; do
+        clear
+        echo ""
+        echo -e "${CYAN}═══ ОТПРАВКА СООБЩЕНИЯ В ГРУППУ ═══${NC}"
+        echo ""
+
+        # Краткий статус вещателя
+        if [ -f "$BROADCASTER_IDENTITY" ]; then
+            local b_hash=$(get_broadcaster_hash)
+            echo -e "  Вещатель: ${GREEN}${BROADCASTER_NAME}${NC}"
+            echo -e "  Адрес:    ${GRAY}${b_hash}${NC}"
+        else
+            echo -e "  Вещатель: ${RED}не найден${NC} ${GRAY}(нужно пересоздать)${NC}"
+        fi
+        echo ""
+        print_line
+        echo -e "  ${LIGHT_GREEN}[1]${NC} ✉️  ${LIGHT_GREEN}Отправить сообщение${NC}"
+        echo -e "  ${YELLOW}[2]${NC} ♻️  ${YELLOW}Пересоздать вещателя${NC}"
+        echo -e "  ${LIGHT_BLUE}[3]${NC} 💾 ${LIGHT_BLUE}Бэкап identity вещателя${NC}"
+        echo -e "  ${LIGHT_PURPLE}[4]${NC} ⏮️  ${LIGHT_PURPLE}Восстановить из бэкапа${NC}"
+        print_line
+        echo -e "  ${GRAY}[0]${NC} ${GRAY}← Назад / Enter / ESC${NC}"
+        echo ""
+
+        echo -ne "${CYAN}Выбор: ${NC}"
+        local choice=$(read_key)
+        echo "$choice"
+
+        # ESC или Enter (пустой ввод) — назад, ДО конвертации раскладки
+        if [[ "$choice" == "ESC" ]] || [[ -z "$choice" ]]; then
+            return
+        fi
+
+        choice=$(convert_ru_to_en "$choice" 2>/dev/null)
+
+        case $choice in
+            1)
+                if verify_pin "отправить сообщение"; then
+                    send_group_message
+                fi
+                ;;
+            2)
+                if verify_pin "пересоздать вещателя"; then
+                    recreate_broadcaster
+                    press_enter
+                fi
+                ;;
+            3)
+                backup_broadcaster_identity
+                press_enter
+                ;;
+            4)
+                if verify_pin "восстановить вещателя из бэкапа"; then
+                    restore_broadcaster
+                    press_enter
+                fi
+                ;;
+            0) return ;;
+            q|Q) echo -e "\n${CYAN}Скрипт завершён.${NC}\n"; exit 0 ;;
+            *) ;;
+        esac
+    done
+}
+
+# Бэкап identity вещателя (с показом существующих + ротация)
+backup_broadcaster_identity() {
+    echo ""
+    echo -e "${CYAN}═══ БЭКАП IDENTITY ВЕЩАТЕЛЯ ═══${NC}"
+    echo ""
+
+    if [ ! -f "$BROADCASTER_IDENTITY" ]; then
+        echo -e "${RED}✗ Файл вещателя не найден:${NC} $BROADCASTER_IDENTITY"
+        echo -e "${GRAY}Сначала создай вещателя через «Пересоздать вещателя».${NC}"
+        return
+    fi
+
+    # Показываем существующие бэкапы
+    local existing=$(ls -1t "$BROADCASTER_DIR"/broadcaster.identity.bak-* 2>/dev/null)
+    if [ -n "$existing" ]; then
+        echo -e "${WHITE}Существующие бэкапы:${NC}"
+        while IFS= read -r f; do
+            echo -e "  ${GRAY}$(basename "$f")${NC}"
+        done <<< "$existing"
+    else
+        echo -e "${GRAY}Бэкапов пока нет.${NC}"
+    fi
+    echo ""
+
+    echo -ne "${WHITE}Создать новый бэкап? (Enter = да, n = нет): ${NC}"
+    local ans
+    read -r ans
+    if [[ "$ans" =~ ^[nNтТ] ]]; then
+        echo -e "${GRAY}Отменено.${NC}"
+        return
+    fi
+
+    # Создаём бэкап с датой и временем
+    local stamp=$(date +%Y-%m-%d_%H-%M-%S)
+    local backup_file="${BROADCASTER_DIR}/broadcaster.identity.bak-${stamp}"
+    if cp "$BROADCASTER_IDENTITY" "$backup_file" 2>/dev/null; then
+        echo ""
+        echo -e "${GREEN}✓ Бэкап создан:${NC}"
+        echo -e "  Путь: ${GRAY}${BROADCASTER_DIR}/${NC}"
+        echo -e "  Файл: ${WHITE}broadcaster.identity.bak-${stamp}${NC}"
+    else
+        echo -e "${RED}✗ Не удалось создать бэкап${NC}"
+        return
+    fi
+
+    # Ротация: оставляем последние BROADCASTER_BACKUP_KEEP
+    local count=$(ls -1 "$BROADCASTER_DIR"/broadcaster.identity.bak-* 2>/dev/null | wc -l)
+    if [ "$count" -gt "$BROADCASTER_BACKUP_KEEP" ]; then
+        local to_delete=$(ls -1t "$BROADCASTER_DIR"/broadcaster.identity.bak-* 2>/dev/null | tail -n +$((BROADCASTER_BACKUP_KEEP + 1)))
+        while IFS= read -r f; do
+            rm -f "$f" 2>/dev/null
+            echo -e "${GRAY}  Удалён старый бэкап: $(basename "$f")${NC}"
+        done <<< "$to_delete"
+    fi
+}
+
+# Пересоздать вещателя (самоналаживающая процедура)
+# Генерит новый identity, прописывает роль broadcaster в config.cfg
+# Прописать хеш вещателя в группу: роль broadcaster в config.cfg +
+# секция [broadcaster] в data.cfg. Вызывается из пересоздания и восстановления.
+# Аргумент: $1 = LXMF-хеш вещателя
+apply_broadcaster_to_group() {
+    local b_hash="$1"
+    local config_file="${GROUP_CONFIG}/config.cfg"
+    local data_file="${GROUP_CONFIG}/data.cfg"
+
+    # Роль broadcaster в config.cfg (если её нет)
+    if grep -qE "^broadcaster\s*=" "$config_file"; then
+        echo -e "${GRAY}→ Роль broadcaster уже есть в config.cfg${NC}"
+    else
+        echo -e "${YELLOW}→ Добавляю роль broadcaster в config.cfg...${NC}"
+        local admin_line=$(grep -nE "^admin\s*=\s*interface" "$config_file" | head -1 | cut -d: -f1)
+        if [ -n "$admin_line" ]; then
+            sed -i "${admin_line}a broadcaster = send_local,anonymous" "$config_file"
+        else
+            sed -i "/^\[rights\]/a broadcaster = send_local,anonymous" "$config_file"
+        fi
+    fi
+
+    # Секция [broadcaster] в data.cfg с нужным хешем
+    echo -e "${YELLOW}→ Обновляю секцию [broadcaster] в data.cfg...${NC}"
+    python3 - "$data_file" "$b_hash" "$BROADCASTER_NAME" << 'PYEOF'
+import sys, re
+data_file, new_hash, name = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(data_file, "r", encoding="utf-8") as f:
+    text = f.read()
+
+new_section = "[broadcaster]\n{} = {}\n\n".format(new_hash, name)
+
+# Находим существующую секцию [broadcaster] и заменяем её содержимое целиком
+pattern = re.compile(r"\[broadcaster\]\s*\n(?:(?!\[).*\n?)*", re.MULTILINE)
+if pattern.search(text):
+    text = pattern.sub(new_section, text, count=1)
+else:
+    # Секции нет — добавляем после [admin]-блока, либо в конец файла
+    m = re.search(r"\[admin\]\s*\n(?:(?!\[).*\n?)*", text)
+    if m:
+        insert_at = m.end()
+        text = text[:insert_at] + "\n" + new_section + text[insert_at:]
+    else:
+        if not text.endswith("\n"):
+            text += "\n"
+        text += "\n" + new_section
+
+# Убираем случайные тройные переводы строк
+text = re.sub(r"\n{3,}", "\n\n", text)
+
+with open(data_file, "w", encoding="utf-8") as f:
+    f.write(text)
+print("OK")
+PYEOF
+}
+
+# Ротация бэкапов вещателя (оставляем последние BROADCASTER_BACKUP_KEEP)
+rotate_broadcaster_backups() {
+    local count=$(ls -1 "$BROADCASTER_DIR"/broadcaster.identity.bak-* 2>/dev/null | wc -l)
+    if [ "$count" -gt "$BROADCASTER_BACKUP_KEEP" ]; then
+        ls -1t "$BROADCASTER_DIR"/broadcaster.identity.bak-* 2>/dev/null | tail -n +$((BROADCASTER_BACKUP_KEEP + 1)) | while IFS= read -r f; do
+            rm -f "$f" 2>/dev/null
+        done
+    fi
+}
+
+# и секцию [broadcaster] в data.cfg, перезапускает группу.
+recreate_broadcaster() {
+    echo ""
+    echo -e "${CYAN}═══ ПЕРЕСОЗДАНИЕ ВЕЩАТЕЛЯ ═══${NC}"
+    echo ""
+    echo -e "${GRAY}Процедура заново создаёт служебного отправителя и прописывает${NC}"
+    echo -e "${GRAY}его в группу. Используй, если отправка перестала работать.${NC}"
+    echo ""
+
+    # Показываем текущий адрес и просим подтверждение
+    if [ -f "$BROADCASTER_IDENTITY" ]; then
+        local cur_hash=$(get_broadcaster_hash)
+        echo -e "${WHITE}Текущий вещатель:${NC} ${GRAY}${cur_hash}${NC}"
+        echo -e "${RED}Внимание: текущий адрес будет заменён новым.${NC}"
+    fi
+    echo ""
+    echo -ne "${WHITE}Точно пересоздать вещателя? (y = да, n/Enter = нет): ${NC}"
+    local confirm
+    read -r confirm
+    if [[ ! "$confirm" =~ ^[yYнН] ]]; then
+        echo -e "${GRAY}Отменено.${NC}"
+        return
+    fi
+    echo ""
+
+    local config_file="${GROUP_CONFIG}/config.cfg"
+    local data_file="${GROUP_CONFIG}/data.cfg"
+
+    # Проверка наличия конфигов группы
+    if [ ! -f "$config_file" ] || [ ! -f "$data_file" ]; then
+        echo -e "${RED}✗ Конфиги группы не найдены в ${GROUP_CONFIG}${NC}"
+        return 1
+    fi
+
+    # 1. Останавливаем группу
+    echo -e "${YELLOW}→ Останавливаю группу...${NC}"
+    systemctl stop "$GROUP_SERVICE"
+    sleep 1
+
+    # 2. Бэкап старого identity вещателя (если был)
+    if [ -f "$BROADCASTER_IDENTITY" ]; then
+        local stamp=$(date +%Y-%m-%d_%H-%M-%S)
+        cp "$BROADCASTER_IDENTITY" "${BROADCASTER_DIR}/broadcaster.identity.bak-${stamp}" 2>/dev/null \
+            && echo -e "${GRAY}→ Бэкап старого identity: broadcaster.identity.bak-${stamp}${NC}"
+    fi
+
+    # 3. Генерируем новый identity вещателя
+    echo -e "${YELLOW}→ Генерирую новый identity вещателя...${NC}"
+    mkdir -p "$BROADCASTER_DIR"
+    # rnid -g не перезаписывает существующий файл — удаляем старый
+    # (бэкап уже сделан выше)
+    rm -f "$BROADCASTER_IDENTITY"
+    if ! "$VENV_PATH/bin/rnid" -g "$BROADCASTER_IDENTITY" >/dev/null 2>&1; then
+        echo -e "${RED}✗ Не удалось сгенерировать identity${NC}"
+        systemctl start "$GROUP_SERVICE"
+        return 1
+    fi
+
+    # 4. Берём LXMF-хеш нового вещателя
+    local new_hash=$(get_broadcaster_hash)
+    if [ -z "$new_hash" ]; then
+        echo -e "${RED}✗ Не удалось получить хеш вещателя${NC}"
+        systemctl start "$GROUP_SERVICE"
+        return 1
+    fi
+    echo -e "${GREEN}→ Новый хеш вещателя: ${new_hash}${NC}"
+
+    # 5-6. Прописываем вещателя в группу (роль + секция)
+    apply_broadcaster_to_group "$new_hash"
+
+    # 7. Запускаем группу обратно
+    echo -e "${YELLOW}→ Запускаю группу...${NC}"
+    systemctl start "$GROUP_SERVICE"
+    sleep 1
+
+    # 8. Ротация бэкапов вещателя
+    rotate_broadcaster_backups
+
+    echo ""
+    if systemctl is-active --quiet "$GROUP_SERVICE"; then
+        echo -e "${GREEN}✓ Вещатель пересоздан и готов к работе${NC}"
+        echo -e "  ${GRAY}Имя:${NC} ${BROADCASTER_NAME}"
+        echo -e "  ${GRAY}Хеш:${NC} ${new_hash}"
+    else
+        echo -e "${RED}⚠ Вещатель пересоздан, но группа не поднялась${NC}"
+        echo -e "${GRAY}Проверь: journalctl -u ${GROUP_SERVICE} -n 30${NC}"
+    fi
+}
+
+# Восстановить вещателя из выбранного бэкапа:
+# подменяет identity файлом из бэкапа + прописывает его хеш в группу + рестарт.
+restore_broadcaster() {
+    echo ""
+    echo -e "${CYAN}═══ ВОССТАНОВЛЕНИЕ ВЕЩАТЕЛЯ ИЗ БЭКАПА ═══${NC}"
+    echo ""
+
+    # Собираем список бэкапов (новые сверху)
+    local backups=()
+    while IFS= read -r f; do
+        [ -n "$f" ] && backups+=("$f")
+    done < <(ls -1t "$BROADCASTER_DIR"/broadcaster.identity.bak-* 2>/dev/null)
+
+    if [ ${#backups[@]} -eq 0 ]; then
+        echo -e "${GRAY}Бэкапов нет — восстанавливать не из чего.${NC}"
+        return
+    fi
+
+    # Показываем пронумерованный список
+    echo -e "${WHITE}Доступные бэкапы:${NC}"
+    local i=1
+    for f in "${backups[@]}"; do
+        echo -e "  ${LIGHT_GREEN}[$i]${NC} $(basename "$f")"
+        i=$((i + 1))
+    done
+    echo -e "  ${GRAY}[0]${NC} ${GRAY}← Отмена${NC}"
+    echo ""
+
+    echo -ne "${WHITE}Выбери номер бэкапа: ${NC}"
+    local num
+    read -r num
+
+    # Отмена / некорректный ввод
+    if [[ "$num" == "0" ]] || [ -z "$num" ]; then
+        echo -e "${GRAY}Отменено.${NC}"
+        return
+    fi
+    if ! [[ "$num" =~ ^[0-9]+$ ]] || [ "$num" -lt 1 ] || [ "$num" -gt ${#backups[@]} ]; then
+        echo -e "${RED}✗ Неверный номер.${NC}"
+        return
+    fi
+
+    local chosen="${backups[$((num - 1))]}"
+    echo ""
+    echo -e "${WHITE}Выбран:${NC} $(basename "$chosen")"
+
+    # Подтверждение
+    echo -e "${RED}Внимание: текущий вещатель будет заменён этим бэкапом.${NC}"
+    echo -ne "${WHITE}Восстановить? (y = да, n/Enter = нет): ${NC}"
+    local confirm
+    read -r confirm
+    if [[ ! "$confirm" =~ ^[yYнН] ]]; then
+        echo -e "${GRAY}Отменено.${NC}"
+        return
+    fi
+    echo ""
+
+    local config_file="${GROUP_CONFIG}/config.cfg"
+    local data_file="${GROUP_CONFIG}/data.cfg"
+    if [ ! -f "$config_file" ] || [ ! -f "$data_file" ]; then
+        echo -e "${RED}✗ Конфиги группы не найдены в ${GROUP_CONFIG}${NC}"
+        return 1
+    fi
+
+    # 1. Останавливаем группу
+    echo -e "${YELLOW}→ Останавливаю группу...${NC}"
+    systemctl stop "$GROUP_SERVICE"
+    sleep 1
+
+    # 2. Бэкап текущего identity (на случай отката) + подмена из выбранного бэкапа
+    if [ -f "$BROADCASTER_IDENTITY" ]; then
+        local stamp=$(date +%Y-%m-%d_%H-%M-%S)
+        cp "$BROADCASTER_IDENTITY" "${BROADCASTER_DIR}/broadcaster.identity.bak-${stamp}" 2>/dev/null \
+            && echo -e "${GRAY}→ Бэкап текущего identity: broadcaster.identity.bak-${stamp}${NC}"
+    fi
+
+    echo -e "${YELLOW}→ Восстанавливаю identity из бэкапа...${NC}"
+    if ! cp "$chosen" "$BROADCASTER_IDENTITY" 2>/dev/null; then
+        echo -e "${RED}✗ Не удалось скопировать бэкап${NC}"
+        systemctl start "$GROUP_SERVICE"
+        return 1
+    fi
+
+    # 3. Берём хеш восстановленного вещателя
+    local r_hash=$(get_broadcaster_hash)
+    if [ -z "$r_hash" ]; then
+        echo -e "${RED}✗ Не удалось получить хеш восстановленного вещателя${NC}"
+        systemctl start "$GROUP_SERVICE"
+        return 1
+    fi
+    echo -e "${GREEN}→ Хеш восстановленного вещателя: ${r_hash}${NC}"
+
+    # 4. Прописываем его в группу
+    apply_broadcaster_to_group "$r_hash"
+
+    # 5. Запускаем группу
+    echo -e "${YELLOW}→ Запускаю группу...${NC}"
+    systemctl start "$GROUP_SERVICE"
+    sleep 1
+
+    # 6. Ротация бэкапов
+    rotate_broadcaster_backups
+
+    echo ""
+    if systemctl is-active --quiet "$GROUP_SERVICE"; then
+        echo -e "${GREEN}✓ Вещатель восстановлен и готов к работе${NC}"
+        echo -e "  ${GRAY}Имя:${NC} ${BROADCASTER_NAME}"
+        echo -e "  ${GRAY}Хеш:${NC} ${r_hash}"
+    else
+        echo -e "${RED}⚠ Вещатель восстановлен, но группа не поднялась${NC}"
+        echo -e "${GRAY}Проверь: journalctl -u ${GROUP_SERVICE} -n 30${NC}"
+    fi
 }
 
 # Отправка сообщения в группу
@@ -1167,17 +1573,11 @@ send_group_message() {
         printf '%s' "$message" | iconv -t UTF-8 > /tmp/group_message.txt 2>/dev/null || echo "$message" > /tmp/group_message.txt
         
         echo ""
-        echo -e "${YELLOW}Останавливаю группу...${NC}"
-        systemctl stop "$GROUP_SERVICE"
-        sleep 1
-        
         echo -e "${YELLOW}Отправляю...${NC}"
         
-        # Отправляем сообщение
+        # Отправляем через вещателя — группа остаётся запущенной и сама
+        # рассылает сообщение участникам от своего имени (онлайн + офлайн)
         "$VENV_PATH/bin/python3" /tmp/send_group_msg.py
-        
-        echo -e "${YELLOW}Запускаю группу...${NC}"
-        systemctl start "$GROUP_SERVICE"
         
         # Удаляем временный файл
         rm -f /tmp/group_message.txt 2>/dev/null
@@ -1198,90 +1598,84 @@ send_group_message() {
 create_send_script() {
     cat > /tmp/send_group_msg.py << 'PYEOF'
 # -*- coding: utf-8 -*-
+# Отправка от имени группы через сервисного вещателя (broadcaster).
+# Вещатель имеет право send_local + anonymous в группе, поэтому группа
+# сама рассылает сообщение всем участникам ОТ СВОЕГО ИМЕНИ — онлайн сразу,
+# офлайн через свою ноду распространения. Сервис группы останавливать не нужно.
 import RNS
 import LXMF
 import time
-import configparser
 
 # Пути
 GROUP_IDENTITY = "/root/.config/lxmf_distribution_group_extended/identity"
-GROUP_DATA = "/root/.config/lxmf_distribution_group_extended/data.cfg"
-GROUP_STORAGE = "/root/.config/lxmf_distribution_group_extended"
+BROADCASTER_IDENTITY = "/home/user/reticulum/rn_broadcaster/identity"
+BROADCASTER_STORAGE = "/home/user/reticulum/rn_broadcaster"
 MESSAGE_FILE = "/tmp/group_message.txt"
 
-# Читаем сообщение (пробуем разные кодировки)
-message = None
+# --- Чтение сообщения (пробуем разные кодировки) ---
+message_text = None
 for encoding in ['utf-8', 'cp1251', 'latin-1']:
     try:
         with open(MESSAGE_FILE, 'r', encoding=encoding) as f:
-            message = f.read().strip()
+            message_text = f.read().strip()
         break
     except:
         continue
 
-if not message:
+if not message_text:
     print("Ошибка: не удалось прочитать сообщение")
     exit(1)
 
-print(f"Сообщение: {message}")
+print(f"Сообщение: {message_text}")
 
-# Инициализация Reticulum
+# --- Инициализация Reticulum ---
 reticulum = RNS.Reticulum()
 
-# Загружаем identity группы
-identity = RNS.Identity.from_file(GROUP_IDENTITY)
+# --- Адрес группы вычисляем из её identity (без хардкода адреса) ---
+group_identity = RNS.Identity.from_file(GROUP_IDENTITY)
+group_addr = RNS.Destination.hash(group_identity, "lxmf", "delivery")
+print(f"Адрес группы: {RNS.hexrep(group_addr, delimit=False)}")
 
-# Создаём LXMF Router
-router = LXMF.LXMRouter(identity=identity, storagepath=GROUP_STORAGE)
-group_dest = router.register_delivery_identity(identity, display_name="")
+# --- Грузим вещателя и поднимаем его роутер ---
+b_identity = RNS.Identity.from_file(BROADCASTER_IDENTITY)
+router = LXMF.LXMRouter(identity=b_identity, storagepath=BROADCASTER_STORAGE)
+src = router.register_delivery_identity(b_identity, display_name="rn-broadcaster")
 
-# Читаем участников группы
-config = configparser.ConfigParser()
-config.read(GROUP_DATA)
+# --- Ищем путь к группе ---
+if not RNS.Transport.has_path(group_addr):
+    RNS.Transport.request_path(group_addr)
+    t0 = time.time()
+    while not RNS.Transport.has_path(group_addr) and time.time() - t0 < 15:
+        time.sleep(0.5)
 
-recipients = []
+if not RNS.Transport.has_path(group_addr):
+    print("✗ Путь к группе не найден — проверь, что сервис группы запущен")
+    exit(1)
 
-# Собираем админов и пользователей
-for section in ['admin', 'user']:
-    if section in config.sections():
-        for hash_addr in config[section]:
-            recipients.append(hash_addr)
+# --- Отправляем ОДНО сообщение на адрес группы ---
+dest_identity = RNS.Identity.recall(group_addr)
+dest = RNS.Destination(dest_identity, RNS.Destination.OUT, RNS.Destination.SINGLE, "lxmf", "delivery")
+lxm = LXMF.LXMessage(dest, src, message_text, title="", desired_method=LXMF.LXMessage.DIRECT)
+router.handle_outbound(lxm)
 
-print(f"Получателей: {len(recipients)}")
+print("Отправляю группе (она разошлёт участникам сама)...")
 
-sent = 0
-failed = 0
+# --- Ждём финальный статус доставки группе ---
+TERMINAL = (LXMF.LXMessage.SENT, LXMF.LXMessage.DELIVERED, LXMF.LXMessage.FAILED)
+t0 = time.time()
+while lxm.state not in TERMINAL and time.time() - t0 < 30:
+    time.sleep(0.5)
 
-for dest_hash in recipients:
-    try:
-        dest_hash_bytes = bytes.fromhex(dest_hash)
-        dest_identity = RNS.Identity.recall(dest_hash_bytes)
-        
-        if dest_identity:
-            dest = RNS.Destination(
-                dest_identity,
-                RNS.Destination.OUT,
-                RNS.Destination.SINGLE,
-                "lxmf", "delivery"
-            )
-            
-            lxm = LXMF.LXMessage(dest, group_dest, message, title="", desired_method=LXMF.LXMessage.DIRECT)
-            lxm.try_propagation_on_fail = True
-            router.handle_outbound(lxm)
-            sent += 1
-            print(f"✓ {dest_hash[:8]}...")
-        else:
-            RNS.Transport.request_path(dest_hash_bytes)
-            failed += 1
-            print(f"? {dest_hash[:8]}... (путь запрошен)")
-    except Exception as e:
-        failed += 1
-        print(f"✗ {dest_hash[:8]}...: {e}")
-
-# Ждём отправку
-time.sleep(10)
-    
-print(f"Отправлено: {sent}")
+print("─" * 40)
+if lxm.state == LXMF.LXMessage.DELIVERED:
+    print("✓ Группа приняла сообщение — рассылка пошла")
+    print("  (онлайн — сразу, офлайн — через ноду распространения группы)")
+elif lxm.state == LXMF.LXMessage.SENT:
+    print("✓ Сообщение отправлено группе")
+    print("  (рассылку участникам группа выполнит сама)")
+else:
+    print(f"⚠ Сообщение не подтверждено (статус: {lxm.state})")
+    print("  Проверь логи: journalctl -u surgut_group.service -n 30")
 PYEOF
 }
 

@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] - 2026-06-14
+### Added
+- **`scripts/rn`** — broadcaster-based group messaging. The "send message" menu now opens a submenu with: send message, recreate broadcaster, back up broadcaster identity, and restore from backup. A dedicated service identity (broadcaster) is registered in the group with send-only, anonymous rights, so the group itself distributes each post to all members under its own name — online immediately, offline via the group's propagation node.
+### Changed
+- **`scripts/rn`** — group messages are now sent by handing one message to the group's own distribution mechanism (via the broadcaster) instead of iterating over every member individually. This removes the previous manual per-recipient delivery loop and keeps the group service running while sending.
 ## [0.7.0] - 2026-06-04
 ### Fixed
 - **`scripts/rn`** — composing a message to a group now opens an editor, so
