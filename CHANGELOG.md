@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] - 2026-06-24
+### Changed
+- **`scripts/rn`** — full conversion of the management interface to a `dialog`-based TUI. Every menu (main menu, services, NomadNet, groups, bot, knowledge base, logs, trusted users, RNode firmware, environment, SSH, monitoring, pages, message board, PIN dialogs) now renders as a proper boxed dialog with white tags, cyan borders, letter accelerators, and auto-sizing, replacing the previous arrow-key/raw-terminal navigation. Informational output (logs, statistics, conversations, address lists) is still printed to the plain terminal so it stays copyable.
+- **`scripts/rn`** — broadcaster identity and storage paths are now resolved from environment variables at send time instead of being hard-coded, so the group-message sender is portable across installations.
+### Added
+- **`scripts/rn`** — smart numeric-input helper for menus, supporting variable-length numbers with instant Esc and Backspace handling.
+### Fixed
+- **`scripts/rn`** — RNode polling now stops every service that holds the serial port (including dynamic group services), queries the device, and restarts only the services that were previously active, fixing a bug where groups were left stopped after a poll.
+
 ## [0.8.0] - 2026-06-14
 ### Added
 - **`scripts/rn`** — broadcaster-based group messaging. The "send message" menu now opens a submenu with: send message, recreate broadcaster, back up broadcaster identity, and restore from backup. A dedicated service identity (broadcaster) is registered in the group with send-only, anonymous rights, so the group itself distributes each post to all members under its own name — online immediately, offline via the group's propagation node.
