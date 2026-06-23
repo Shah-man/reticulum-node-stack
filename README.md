@@ -2,6 +2,8 @@
 
 A complete, production-ready stack for running a Reticulum network node — an AI-powered LXMF bot, a NomadNet propagation node, a message board, and extended LXMF distribution groups, all managed through a single interactive shell tool.
 
+![rn — main menu](docs/images/rn_main_menu_en.png)
+
 ## What's inside
 
 ### `scripts/`
