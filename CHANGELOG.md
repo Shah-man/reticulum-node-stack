@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.10.0] - 2026-06-29
+### Added
+- **Bilingual interface (English / Russian)** across the whole management stack. Every user-facing string in `scripts/rn`, `scripts/f2b`, and `scripts/fetch-rnode-firmware.sh` is now served from a per-language dictionary, with English and Russian kept at parity. Proper nouns, device identifiers, firmware filenames, configuration keys, and user data are intentionally left untranslated.
+- **Shared language switch.** A single language file (`.rn_lang`, stored next to the Reticulum user's data) drives all three scripts at once. Switching the language from `rn` ("Environment & Settings" -> language) instantly changes the language of `f2b` and `fetch-rnode-firmware.sh` as well; each script discovers the same file through identical user-resolution logic, so they never drift out of sync.
+- **`scripts/f2b`** -- the Fail2ban manager is now part of the stack and shares the project's look and feel. Its main menu was converted to the same `dialog`-based TUI as `rn` (black background, cyan borders, white tags, color-coded items), while all informational screens (status, banned IPs, event log, attack statistics) remain in the plain terminal so they stay copyable.
+- **`scripts/rn`** -- translated CLI help (`rn help`) now follows the active interface language.
+### Changed
+- **`scripts/f2b`** -- the header no longer hard-codes a machine name or DNS entry; it shows the current hostname dynamically and the obsolete DNS line was removed, making the script portable across installations.
+- **`scripts/rn`** -- the Fail2ban Manager entry in the main menu now appears only when `f2b` is actually installed.
+### Fixed
+- **`scripts/rn`** -- opening the Fail2ban Manager is now guarded: if `f2b` is missing or removed after the menu is drawn, the script shows a short notice instead of crashing on a failed `exec`.
+
 ## [0.9.0] - 2026-06-24
 ### Changed
 - **`scripts/rn`** — full conversion of the management interface to a `dialog`-based TUI. Every menu (main menu, services, NomadNet, groups, bot, knowledge base, logs, trusted users, RNode firmware, environment, SSH, monitoring, pages, message board, PIN dialogs) now renders as a proper boxed dialog with white tags, cyan borders, letter accelerators, and auto-sizing, replacing the previous arrow-key/raw-terminal navigation. Informational output (logs, statistics, conversations, address lists) is still printed to the plain terminal so it stays copyable.
