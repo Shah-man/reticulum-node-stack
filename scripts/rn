@@ -16,6 +16,12 @@ if [ "$EUID" -ne 0 ]; then
     fi
 fi
 
+# ncurses waits ESCDELAY milliseconds after an ESC to see whether it is the
+# start of an escape sequence (arrows, F-keys). Its default is 1000ms, which
+# makes a lone ESC feel laggy compared with the Back button. Lower it so ESC
+# reacts almost instantly while still recognising real escape sequences.
+export ESCDELAY="${ESCDELAY:-50}"
+
 # Динамическое определение пользователя Reticulum
 # Ищем юзера у которого есть ~/reticulum/venv (установленный стек)
 get_reticulum_user() {
@@ -126,12 +132,12 @@ get_bot_name() {
 }
 
 declare -A SERVICE_NAMES=(
-    ["reticulum.service"]="🌐 Reticulum Stack"
-    ["nomadnet.service"]="📡 NomadNet Node"
-    ["surgut_group.service"]="👥 $(get_group_name)"
-    ["lxmf_group.service"]="👥 $(get_group_name)"
-    ["surgutbot86.service"]="🤖 $(get_bot_name)"
-    ["messageboard.service"]="📋 messageboard"
+    ["reticulum.service"]="Reticulum Stack"
+    ["nomadnet.service"]="NomadNet Node"
+    ["surgut_group.service"]="$(get_group_name)"
+    ["lxmf_group.service"]="$(get_group_name)"
+    ["surgutbot86.service"]="$(get_bot_name)"
+    ["messageboard.service"]="messageboard"
 )
 
 # Путь к доске объявлений
@@ -235,10 +241,11 @@ load_lang() {
         # ── Dialog buttons ──
         L[btn_open]="Open"
         L[btn_back]="Back"
+        L[m_quit]="Exit"
         L[btn_yes]="Yes"
         L[btn_no]="No"
         # ── Common / shared ──
-        L[press_enter]="Press Enter to continue..."
+        L[press_enter]="Press Enter or ESC to continue..."
         L[press_enter_editor]="Press Enter to open the editor..."
         L[pypi_checking]="Checking pypi.org access..."
         # ── Service actions ──
@@ -299,7 +306,7 @@ load_lang() {
         L[bc_m_recreate]="Recreate broadcaster"
         L[bc_m_backup]="Back up broadcaster identity"
         L[bc_m_restore]="Restore from backup"
-        L[bc_back_hint]="← Back / Enter / ESC"
+        L[bc_back_hint]="← Back (ESC)"
         L[bc_choice]="Choice: "
         L[bc_reason_send]="send a message"
         L[bc_reason_recreate]="recreate the broadcaster"
@@ -309,7 +316,7 @@ load_lang() {
         L[bc_create_first]="First create a broadcaster via \"Recreate broadcaster\"."
         L[bc_existing_backups]="Existing backups:"
         L[bc_no_backups]="No backups yet."
-        L[bc_create_new]="Create a new backup? (Enter = yes, n = no): "
+        L[bc_create_new]="Create a new backup? (Enter or y = yes, n = no): "
         L[bc_cancelled]="Cancelled."
         L[bc_backup_created]="✓ Backup created:"
         L[bc_path]="  Path: "
@@ -325,7 +332,7 @@ load_lang() {
         L[bcr_desc2]="it in the group. Use it if sending stopped working."
         L[bcr_current]="Current broadcaster:"
         L[bcr_warn_replace]="Warning: the current address will be replaced with a new one."
-        L[bcr_confirm]="Really recreate the broadcaster? (y = yes, n/Enter = no): "
+        L[bcr_confirm]="Really recreate the broadcaster? (Enter or y = yes, n = no): "
         L[bcr_cfg_notfound]="✗ Group configs not found in %s"
         L[bcr_stopping_grp]="→ Stopping the group..."
         L[bcr_backup_old]="→ Backup of old identity: broadcaster.identity.bak-%s"
@@ -347,7 +354,7 @@ load_lang() {
         L[bcs_bad_num]="✗ Invalid number."
         L[bcs_chosen]="Chosen:"
         L[bcs_warn_replace]="Warning: the current broadcaster will be replaced with this backup."
-        L[bcs_confirm]="Restore? (y = yes, n/Enter = no): "
+        L[bcs_confirm]="Restore? (Enter or y = yes, n = no): "
         L[bcs_restoring]="→ Restoring identity from backup..."
         L[bcs_restored]="✓ Broadcaster restored from backup"
         L[bcs_backup_cur]="→ Backup of current identity: broadcaster.identity.bak-%s"
@@ -362,11 +369,11 @@ load_lang() {
         L[sgm_desc4]="Empty text = cancel."
         L[sgm_open_editor]="Press Enter to open the editor..."
         L[sgm_message]="Message:"
-        L[sgm_send_confirm]="Send? (Enter = yes, n = no): "
+        L[sgm_send_confirm]="Send? (Enter or y = yes, n = no): "
         L[sgm_cancelled]="Cancelled"
         L[sgm_sending]="Sending..."
         L[sgm_done]="✓ Done!"
-        L[sgm_send_more]="Send another? (y = yes, Enter = exit): "
+        L[sgm_send_more]="Send another? (Enter or y = yes, n = no): "
         # ── Bot commands cheat sheet ──
         L[cmd_hdr]="═══ BOT COMMANDS (CHEAT SHEET) ═══"
         L[cmd_admin]="Admin commands:"
@@ -423,7 +430,8 @@ load_lang() {
         L[mon_m_resources]="Resource usage"
         L[mon_m_actionlog]="Script action log"
         L[mon_m_pages]="View node pages"
-        L[mon_logs_hdr]="═══ RETICULUM LOGS (Ctrl+C to exit) ═══"
+        L[mon_logs_hdr]="═══ RETICULUM LOGS ═══"
+        L[log_esc_hint]="Press ESC to return to the menu"
         L[mon_ifaces_hdr]="═══ RNS INTERFACES ═══"
         L[mon_rnstatus_na]="rnstatus not available"
         L[mon_peers_hdr]="═══ CONNECTED PEERS ═══"
@@ -455,7 +463,7 @@ load_lang() {
         L[mb_m_export]="Export board (backup)"
         L[mb_m_import]="Import board (restore)"
         L[mb_stop_reason]="stop messageboard"
-        L[mb_logs_hdr]="═══ BOARD LOGS (Ctrl+C to exit) ═══"
+        L[mb_logs_hdr]="═══ BOARD LOGS ═══"
         L[mb_msgs_hdr]="═══ BOARD MESSAGES ═══"
         L[mb_total_msgs]="Total messages:"
         L[mb_board_empty_py]="Board is empty"
@@ -574,7 +582,7 @@ load_lang() {
         L[ag_none]="No groups found"
         L[ag_create_hint]="Create one via the bot: /newgroup <name>"
         L[ag_running]="Running: %s/%s"
-        L[ag_private]="[private]"
+        L[ag_private]="🔒"
         L[ag_m_start_all]="Start ALL groups"
         L[ag_m_stop_all]="Stop ALL groups"
         L[ag_m_restart_all]="Restart ALL groups"
@@ -658,7 +666,7 @@ load_lang() {
         L[kb_m_delete]="Delete a topic"
         L[kb_none]="No topic files"
         L[kb_count]="Topic files: %s"
-        L[kb_cancel_hint]="(Enter or 0 = cancel)"
+        L[kb_cancel_hint]="(empty = cancel)"
         L[kb_fname_prompt]="File name (without .txt): "
         L[kb_cancelled]="Cancelled"
         L[kb_file_created]="✓ File created: %s.txt"
@@ -682,6 +690,10 @@ load_lang() {
         L[grp_stop_reason]="stop the group"
         L[grp_edit_data_reason]="edit data.cfg"
         L[grp_edit_config_reason]="edit config.cfg"
+        L[env_editcfg_reason]="edit the Reticulum config"
+        L[env_update_reason]="upgrade Reticulum packages"
+        L[ssh_edit_reason]="edit the SSH server config"
+        L[ssh_restart_reason]="restart the SSH server"
         L[grp_edit_owr_reason]="edit config.cfg.owr"
         # ── Config editing (shared) ──
         L[cfg_file]="File:"
@@ -732,7 +744,7 @@ load_lang() {
         L[log_clear_reason]="clear logs"
         L[log_clear_confirm]="\nDelete all message logs?"
         L[log_cleared]="\n\Z2✓ Logs cleared\Zn"
-        L[log_users_hdr]="  👥 USER LIST"
+        L[log_users_hdr]="  USER LIST"
         L[log_notfound]="Log not found"
         L[log_msgs_count]="msgs"
         L[log_no_users]="No users found"
@@ -742,12 +754,12 @@ load_lang() {
         L[log_chat_with]="═══ 💬 CHAT WITH %s ═══"
         L[log_address]="Address:"
         L[log_total_msgs]="Total: %s messages | Page %s/%s"
-        L[log_nav_hint]="[n] next | [p] prev | [f] first | [l] last | [q/0/ESC] exit"
+        L[log_nav_hint]="[n] next | [p] prev | [f] first | [l] last | [ESC] exit"
         L[log_no_msgs]="No messages found"
         L[log_choice]="Choice: "
         L[log_all_hdr]="═══ 📜 ALL MESSAGES ═══"
         L[log_total_short]="Total: %s messages | Page %s/%s"
-        L[log_nav_hint2]="[n] next | [p] prev | [f] first | [l] last | [0] exit"
+        L[log_nav_hint2]="[n] next | [p] prev | [f] first | [l] last | [ESC] exit"
         L[log_admin_hdr]="═══ 👑 ADMIN LOGS ═══"
         L[log_admin_notfound]="Admin log not found"
         L[log_empty]="Log is empty"
@@ -802,7 +814,7 @@ load_lang() {
         L[bot_settings_reason]="bot settings"
         L[bot_trusted_reason]="manage trusted users"
         L[bot_logs_reason]="view logs"
-        L[bot_logs_hdr]="═══ LOGS: %s (Ctrl+C to exit) ═══"
+        L[bot_logs_hdr]="═══ LOGS: %s ═══"
         L[bot_stats_hdr]="═══ BOT STATISTICS ═══"
         L[bot_stat_total_msg]="Total messages:"
         L[bot_stat_total_users]="Total users:"
@@ -893,10 +905,11 @@ load_lang() {
         # ── Кнопки диалогов ──
         L[btn_open]="Открыть"
         L[btn_back]="Назад"
+        L[m_quit]="Выход"
         L[btn_yes]="Да"
         L[btn_no]="Нет"
         # ── Общие / разделяемые ──
-        L[press_enter]="Нажми Enter чтобы продолжить..."
+        L[press_enter]="Нажмите Enter или ESC чтобы продолжить..."
         L[press_enter_editor]="Нажми Enter чтобы открыть редактор..."
         L[pypi_checking]="Проверяю доступ к pypi.org..."
         # ── Действия с сервисами ──
@@ -957,7 +970,7 @@ load_lang() {
         L[bc_m_recreate]="Пересоздать вещателя"
         L[bc_m_backup]="Бэкап identity вещателя"
         L[bc_m_restore]="Восстановить из бэкапа"
-        L[bc_back_hint]="← Назад / Enter / ESC"
+        L[bc_back_hint]="← Назад (ESC)"
         L[bc_choice]="Выбор: "
         L[bc_reason_send]="отправить сообщение"
         L[bc_reason_recreate]="пересоздать вещателя"
@@ -967,7 +980,7 @@ load_lang() {
         L[bc_create_first]="Сначала создай вещателя через «Пересоздать вещателя»."
         L[bc_existing_backups]="Существующие бэкапы:"
         L[bc_no_backups]="Бэкапов пока нет."
-        L[bc_create_new]="Создать новый бэкап? (Enter = да, n = нет): "
+        L[bc_create_new]="Создать новый бэкап? (Enter или y — да, n — нет): "
         L[bc_cancelled]="Отменено."
         L[bc_backup_created]="✓ Бэкап создан:"
         L[bc_path]="  Путь: "
@@ -983,7 +996,7 @@ load_lang() {
         L[bcr_desc2]="его в группу. Используй, если отправка перестала работать."
         L[bcr_current]="Текущий вещатель:"
         L[bcr_warn_replace]="Внимание: текущий адрес будет заменён новым."
-        L[bcr_confirm]="Точно пересоздать вещателя? (y = да, n/Enter = нет): "
+        L[bcr_confirm]="Точно пересоздать вещателя? (Enter или y — да, n — нет): "
         L[bcr_cfg_notfound]="✗ Конфиги группы не найдены в %s"
         L[bcr_stopping_grp]="→ Останавливаю группу..."
         L[bcr_backup_old]="→ Бэкап старого identity: broadcaster.identity.bak-%s"
@@ -1005,7 +1018,7 @@ load_lang() {
         L[bcs_bad_num]="✗ Неверный номер."
         L[bcs_chosen]="Выбран:"
         L[bcs_warn_replace]="Внимание: текущий вещатель будет заменён этим бэкапом."
-        L[bcs_confirm]="Восстановить? (y = да, n/Enter = нет): "
+        L[bcs_confirm]="Восстановить? (Enter или y — да, n — нет): "
         L[bcs_restoring]="→ Восстанавливаю identity из бэкапа..."
         L[bcs_restored]="✓ Вещатель восстановлен из бэкапа"
         L[bcs_backup_cur]="→ Бэкап текущего identity: broadcaster.identity.bak-%s"
@@ -1020,11 +1033,11 @@ load_lang() {
         L[sgm_desc4]="Пустой текст = отмена."
         L[sgm_open_editor]="Нажми Enter чтобы открыть редактор..."
         L[sgm_message]="Сообщение:"
-        L[sgm_send_confirm]="Отправить? (Enter = да, n = нет): "
+        L[sgm_send_confirm]="Отправить? (Enter или y — да, n — нет): "
         L[sgm_cancelled]="Отменено"
         L[sgm_sending]="Отправляю..."
         L[sgm_done]="✓ Готово!"
-        L[sgm_send_more]="Отправить ещё? (y = да, Enter = выход): "
+        L[sgm_send_more]="Отправить ещё? (Enter или y — да, n — нет): "
         # ── Шпаргалка команд бота ──
         L[cmd_hdr]="═══ КОМАНДЫ БОТА (ШПАРГАЛКА) ═══"
         L[cmd_admin]="Админ команды:"
@@ -1081,7 +1094,8 @@ load_lang() {
         L[mon_m_resources]="Использование ресурсов"
         L[mon_m_actionlog]="Лог действий скрипта"
         L[mon_m_pages]="Просмотр страниц узла"
-        L[mon_logs_hdr]="═══ ЛОГИ RETICULUM (Ctrl+C для выхода) ═══"
+        L[mon_logs_hdr]="═══ ЛОГИ RETICULUM ═══"
+        L[log_esc_hint]="Нажмите ESC для возврата в меню"
         L[mon_ifaces_hdr]="═══ ИНТЕРФЕЙСЫ RNS ═══"
         L[mon_rnstatus_na]="rnstatus не доступен"
         L[mon_peers_hdr]="═══ ПОДКЛЮЧЁННЫЕ ПИРЫ ═══"
@@ -1113,7 +1127,7 @@ load_lang() {
         L[mb_m_export]="Экспорт доски (бэкап)"
         L[mb_m_import]="Импорт доски (восстановить)"
         L[mb_stop_reason]="остановить messageboard"
-        L[mb_logs_hdr]="═══ ЛОГИ ДОСКИ (Ctrl+C для выхода) ═══"
+        L[mb_logs_hdr]="═══ ЛОГИ ДОСКИ ═══"
         L[mb_msgs_hdr]="═══ СООБЩЕНИЯ НА ДОСКЕ ═══"
         L[mb_total_msgs]="Всего сообщений:"
         L[mb_board_empty_py]="Доска пуста"
@@ -1231,7 +1245,7 @@ load_lang() {
         L[ag_none]="Групп не найдено"
         L[ag_create_hint]="Создай через бота: /newgroup <название>"
         L[ag_running]="Работает: %s/%s"
-        L[ag_private]="[private]"
+        L[ag_private]="🔒"
         L[ag_m_start_all]="Запустить ВСЕ группы"
         L[ag_m_stop_all]="Остановить ВСЕ группы"
         L[ag_m_restart_all]="Перезапустить ВСЕ группы"
@@ -1315,7 +1329,7 @@ load_lang() {
         L[kb_m_delete]="Удалить тему"
         L[kb_none]="Нет файлов тем"
         L[kb_count]="Файлов тем: %s"
-        L[kb_cancel_hint]="(Enter или 0 = отмена)"
+        L[kb_cancel_hint]="(пусто = отмена)"
         L[kb_fname_prompt]="Имя файла (без .txt): "
         L[kb_cancelled]="Отменено"
         L[kb_file_created]="✓ Файл создан: %s.txt"
@@ -1339,7 +1353,11 @@ load_lang() {
         L[grp_stop_reason]="остановить группу"
         L[grp_edit_data_reason]="редактировать data.cfg"
         L[grp_edit_config_reason]="редактировать config.cfg"
+        L[env_editcfg_reason]="редактировать конфиг Reticulum"
         L[grp_edit_owr_reason]="редактировать config.cfg.owr"
+        L[env_update_reason]="обновить пакеты Reticulum"
+        L[ssh_edit_reason]="редактировать конфиг SSH-сервера"
+        L[ssh_restart_reason]="перезапустить SSH-сервер"
         # ── Редактирование конфигов (общее) ──
         L[cfg_file]="Файл:"
         L[cfg_lines_size]="Строк: %s  Размер: %s"
@@ -1389,7 +1407,7 @@ load_lang() {
         L[log_clear_reason]="очистить логи"
         L[log_clear_confirm]="\nУдалить все логи сообщений?"
         L[log_cleared]="\n\Z2✓ Логи очищены\Zn"
-        L[log_users_hdr]="  👥 СПИСОК ПОЛЬЗОВАТЕЛЕЙ"
+        L[log_users_hdr]="  СПИСОК ПОЛЬЗОВАТЕЛЕЙ"
         L[log_notfound]="Лог не найден"
         L[log_msgs_count]="сообщ."
         L[log_no_users]="Пользователей не найдено"
@@ -1399,12 +1417,12 @@ load_lang() {
         L[log_chat_with]="═══ 💬 ПЕРЕПИСКА С %s ═══"
         L[log_address]="Адрес:"
         L[log_total_msgs]="Всего: %s сообщений | Страница %s/%s"
-        L[log_nav_hint]="[n] след. | [p] пред. | [f] первая | [l] последняя | [q/0/ESC] выход"
+        L[log_nav_hint]="[n] след. | [p] пред. | [f] первая | [l] последняя | [ESC] выход"
         L[log_no_msgs]="Сообщений не найдено"
         L[log_choice]="Выбор: "
         L[log_all_hdr]="═══ 📜 ВСЕ СООБЩЕНИЯ ═══"
         L[log_total_short]="Всего: %s сообщений | Страница %s/%s"
-        L[log_nav_hint2]="[n] след. | [p] пред. | [f] первая | [l] последняя | [0] выход"
+        L[log_nav_hint2]="[n] след. | [p] пред. | [f] первая | [l] последняя | [ESC] выход"
         L[log_admin_hdr]="═══ 👑 ЛОГИ АДМИНОВ ═══"
         L[log_admin_notfound]="Лог админа не найден"
         L[log_empty]="Лог пуст"
@@ -1459,7 +1477,7 @@ load_lang() {
         L[bot_settings_reason]="настройки бота"
         L[bot_trusted_reason]="управление доверенными"
         L[bot_logs_reason]="просмотр логов"
-        L[bot_logs_hdr]="═══ ЛОГИ: %s (Ctrl+C для выхода) ═══"
+        L[bot_logs_hdr]="═══ ЛОГИ: %s ═══"
         L[bot_stats_hdr]="═══ СТАТИСТИКА БОТА ═══"
         L[bot_stat_total_msg]="Всего сообщений:"
         L[bot_stat_total_users]="Всего пользователей:"
@@ -1562,14 +1580,74 @@ dlg_menu() {
     local items=("$@")
     local def=()
     [ -n "$default" ] && def=(--default-item "$default")
+
+    # ── Dynamic sizing ────────────────────────────────────────────────
+    # Items come in (tag, description) pairs, so the number of menu rows
+    # is half the array length. We size the dialog to show every row
+    # without scrolling, while never exceeding the actual terminal size.
+    local n_items=$(( ${#items[@]} / 2 ))
+
+    # Terminal size (fallback to a sane default if not reported)
+    local term_lines="${LINES:-0}"
+    local term_cols="${COLUMNS:-0}"
+    if [ "$term_lines" -le 0 ] 2>/dev/null; then
+        term_lines=$(tput lines 2>/dev/null || echo 24)
+    fi
+    if [ "$term_cols" -le 0 ] 2>/dev/null; then
+        term_cols=$(tput cols 2>/dev/null || echo 80)
+    fi
+
+    # Count how many lines the status/header text needs (it may contain \n).
+    local status_lines=1
+    if [ -n "$status" ]; then
+        # count literal \n sequences plus the first line
+        local nl_count
+        nl_count=$(printf '%s' "$status" | grep -o '\\n' | wc -l 2>/dev/null || echo 0)
+        status_lines=$(( nl_count + 1 ))
+    fi
+
+    # dialog chrome: title + borders + buttons + status block ≈ 7 lines.
+    local chrome=$(( 7 + status_lines ))
+
+    # Desired total height = chrome + one row per item.
+    local height=$(( chrome + n_items ))
+
+    # Cap to terminal height (leave a 1-line margin); never smaller than ~10.
+    local max_h=$(( term_lines - 1 ))
+    [ "$height" -gt "$max_h" ] && height=$max_h
+    [ "$height" -lt 10 ] && height=10
+
+    # menu_h = rows visible in the list area = height - chrome.
+    local menu_h=$(( height - chrome ))
+    [ "$menu_h" -lt 1 ] && menu_h=1
+    # If everything fits, show all items (no scroll); otherwise show as many
+    # as the area allows (dialog will scroll the rest).
+    [ "$menu_h" -gt "$n_items" ] && menu_h=$n_items
+
+    # Width: wide enough for content, capped to terminal (margin 4).
+    local width=70
+    local max_w=$(( term_cols - 4 ))
+    [ "$width" -gt "$max_w" ] && width=$max_w
+    [ "$width" -lt 40 ] && width=40
+
     DLG_CHOICE=$(dialog --colors \
         --backtitle "RETICULUM CONTROL" \
         --title " $title " \
         --ok-label "${L[btn_open]}" --cancel-label "${L[btn_back]}" \
         "${def[@]}" \
-        --menu "$status" 0 0 0 \
+        --menu "$status" "$height" "$width" "$menu_h" \
         "${items[@]}" \
         3>&1 1>&2 2>&3)
+    local dlg_rc=$?
+
+    # ── Back vs ESC ───────────────────────────────────────────────────
+    # dialog exit codes: 0 = item chosen, 1 = Back/Cancel button, 255 = ESC.
+    # Both the Back button and ESC step back one level, instantly (ESCDELAY is
+    # lowered at the top of the script, so ESC reacts immediately). To leave
+    # from a deep menu, just tap ESC a few times to walk up to the terminal.
+    if [ "$dlg_rc" -eq 255 ]; then
+        DLG_CHOICE=""
+    fi
 }
 
 # Короткие хелперы-обёртки (единый стиль)
@@ -1607,6 +1685,7 @@ setup_pin() {
         pin1=$(dialog --colors --insecure \
             --backtitle "RETICULUM CONTROL" \
             --title "${L[pin_setup_title]}" \
+            --ok-label "${L[btn_open]}" --cancel-label "${L[btn_back]}" \
             --passwordbox "${L[pin_setup_prompt]}" 12 54 \
             3>&1 1>&2 2>&3)
         local rc=$?
@@ -1622,6 +1701,7 @@ setup_pin() {
         pin2=$(dialog --colors --insecure \
             --backtitle "RETICULUM CONTROL" \
             --title "${L[pin_setup_title]}" \
+            --ok-label "${L[btn_open]}" --cancel-label "${L[btn_back]}" \
             --passwordbox "${L[pin_repeat]}" 9 50 \
             3>&1 1>&2 2>&3)
         rc=$?
@@ -1654,6 +1734,7 @@ verify_pin() {
     entered_pin=$(dialog --colors --insecure \
         --backtitle "RETICULUM CONTROL" \
         --title "${L[pin_confirm_title]}" \
+        --ok-label "${L[btn_open]}" --cancel-label "${L[btn_back]}" \
         --passwordbox "$(printf "${L[pin_confirm_prompt]}" "${action}")" 11 50 \
         3>&1 1>&2 2>&3)
     local rc=$?
@@ -1725,9 +1806,18 @@ print_line() {
 }
 
 press_enter() {
+    # Разделитель + подсказка снизу, единообразно для всех выводов. На длинных
+    # выводах терминал прокручивается сюда (к месту ввода), поэтому подсказка
+    # всегда оказывается на виду. Закрываем и по Enter, и по ESC.
     echo ""
+    echo -e "${CYAN}────────────────────────────────────${NC}"
     echo -e "${GRAY}${L[press_enter]}${NC}"
-    read
+    local _k
+    read -rsn1 _k 2>/dev/null
+    if [ "$_k" = $'\e' ]; then
+        # съесть возможный хвост escape-последовательности
+        while read -rsn1 -t 0.02 _k 2>/dev/null; do :; done
+    fi
 }
 
 # Чтение ввода с поддержкой ESC
@@ -2081,6 +2171,22 @@ show_status() {
             ((active_count++))
         fi
     done
+
+    # Динамические группы (созданные через бота): lxmf_group_*
+    for dir in /root/.config/lxmf_group_*; do
+        [ -d "$dir" ] && [ -f "$dir/identity" ] || continue
+        local gname=$(get_group_display_name "$dir")
+        local gservice=$(get_group_service "$dir")
+        local glock=""
+        is_group_private "$dir" && glock=" ${YELLOW}${L[ag_private]}${NC}"
+        ((total_count++))
+        if [ "$(get_service_status "$gservice")" = "active" ]; then
+            ((active_count++))
+            echo -e "  ${GREEN}●${NC} ${gname}${glock} ${GREEN}${L[st_running]}${NC}"
+        else
+            echo -e "  ${RED}●${NC} ${gname}${glock} ${RED}${L[st_stopped]}${NC}"
+        fi
+    done
     
     echo ""
     print_line
@@ -2116,6 +2222,20 @@ menu_services() {
                 STATUS="${STATUS}\Z2●\Zn ${nm} \Z2${L[st_running]}\Zn\n"
             else
                 STATUS="${STATUS}\Z1●\Zn ${nm} \Z1${L[st_stopped]}\Zn\n"
+            fi
+        done
+
+        # Динамические группы (созданные через бота): lxmf_group_*
+        for gdir in /root/.config/lxmf_group_*; do
+            [ -d "$gdir" ] && [ -f "$gdir/identity" ] || continue
+            local gnm=$(get_group_display_name "$gdir")
+            local gsvc=$(get_group_service "$gdir")
+            local glk=""
+            is_group_private "$gdir" && glk=" \Z3${L[ag_private]}\Zn"
+            if [ "$(get_service_status "$gsvc")" = "active" ]; then
+                STATUS="${STATUS}\Z2●\Zn ${gnm}${glk} \Z2${L[st_running]}\Zn\n"
+            else
+                STATUS="${STATUS}\Z1●\Zn ${gnm}${glk} \Z1${L[st_stopped]}\Zn\n"
             fi
         done
 
@@ -2210,14 +2330,11 @@ menu_single_service() {
                 press_enter
                 ;;
             4)
-                echo ""
-                echo -e "${CYAN}$(printf "${L[bot_logs_hdr]}" "$clean_name")${NC}"
-                echo ""
-                sudo journalctl -u "$service" -f --no-pager -n 50
+                view_live_log "$(printf "${L[bot_logs_hdr]}" "$clean_name")" -u "$service" -f --no-pager -n 50
                 ;;
             5)
                 echo ""
-                sudo systemctl status "$service"
+                systemctl status "$service" --no-pager
                 press_enter
                 ;;
             6)
@@ -2272,13 +2389,11 @@ menu_nomadnet() {
                 ;;
             3) restart_service "$service"; press_enter ;;
             4)
-                echo ""
-                echo -e "${CYAN}$(printf "${L[bot_logs_hdr]}" "$clean_name")${NC}"
-                sudo journalctl -u "$service" -f --no-pager -n 50
+                view_live_log "$(printf "${L[bot_logs_hdr]}" "$clean_name")" -u "$service" -f --no-pager -n 50
                 ;;
             5)
                 echo ""
-                sudo systemctl status "$service"
+                systemctl status "$service" --no-pager
                 press_enter
                 ;;
             6) launch_nomadnet_interactive ;;
@@ -2494,12 +2609,15 @@ menu_group() {
 
     while true; do
         local st=$(get_service_status "$service")
+        local group_hash=$(get_group_hash "$config_path")
         local STATUS
         if [ "$st" = "active" ]; then
             STATUS="\Z2● ${clean_name} ${L[st_running]}\Zn"
         else
             STATUS="\Z1● ${clean_name} ${L[st_stopped]}\Zn"
         fi
+        # Динамический LXMF-адрес и путь группы в шапку (как у динамич. групп)
+        STATUS="${STATUS}\n\Z7LXMF:\Zn ${group_hash}\n\Z7${L[cfg_file]}\Zn ${config_path}"
 
         dlg_menu "$clean_name" "$STATUS" "$DEF" \
             "1"  "${C_START}${L[ss_m_start]}\Zn" \
@@ -2529,13 +2647,11 @@ menu_group() {
                 ;;
             3) restart_service "$service"; press_enter ;;
             4)
-                echo ""
-                echo -e "${CYAN}$(printf "${L[bot_logs_hdr]}" "$clean_name")${NC}"
-                sudo journalctl -u "$service" -f --no-pager -n 50
+                view_live_log "$(printf "${L[bot_logs_hdr]}" "$clean_name")" -u "$service" -f --no-pager -n 50
                 ;;
             5)
                 echo ""
-                sudo systemctl status "$service"
+                systemctl status "$service" --no-pager
                 press_enter
                 ;;
             6) show_group_members ;;
@@ -2595,7 +2711,7 @@ send_message_menu() {
         echo -e "  ${LIGHT_BLUE}[3]${NC} 💾 ${LIGHT_BLUE}${L[bc_m_backup]}${NC}"
         echo -e "  ${LIGHT_PURPLE}[4]${NC} ⏮️  ${LIGHT_PURPLE}${L[bc_m_restore]}${NC}"
         print_line
-        echo -e "  ${GRAY}[0]${NC} ${GRAY}${L[bc_back_hint]}${NC}"
+        echo -e "  ${GRAY}[ESC]${NC} ${GRAY}${L[bc_back_hint]}${NC}"
         echo ""
 
         echo -ne "${CYAN}${L[bc_choice]}${NC}"
@@ -2780,7 +2896,8 @@ recreate_broadcaster() {
     echo -ne "${WHITE}${L[bcr_confirm]}${NC}"
     local confirm
     read -r confirm
-    if [[ ! "$confirm" =~ ^[yYнН] ]]; then
+    # Enter (пусто) или y/д = применить; только явное n/н = отмена
+    if [[ "$confirm" =~ ^[nNтТ] ]]; then
         echo -e "${GRAY}${L[bc_cancelled]}${NC}"
         return
     fi
@@ -2901,7 +3018,8 @@ restore_broadcaster() {
     echo -ne "${WHITE}${L[bcs_confirm]}${NC}"
     local confirm
     read -r confirm
-    if [[ ! "$confirm" =~ ^[yYнН] ]]; then
+    # Enter (пусто) или y/д = применить; только явное n/н = отмена
+    if [[ "$confirm" =~ ^[nNтТ] ]]; then
         echo -e "${GRAY}${L[bc_cancelled]}${NC}"
         return
     fi
@@ -2998,8 +3116,8 @@ send_group_message() {
         echo -ne "${YELLOW}${L[sgm_send_confirm]}${NC}"
         read -r confirm
         
-        # Пустой ввод (Enter) = да, n/N/т/Т = нет
-        if [[ "$confirm" =~ ^[NnТт]$ ]]; then
+        # Пустой ввод (Enter) = да, n/т = нет
+        if [[ "$confirm" =~ ^[nNтТ] ]]; then
             echo -e "${YELLOW}${L[sgm_cancelled]}${NC}"
             continue
         fi
@@ -3023,7 +3141,8 @@ send_group_message() {
         echo -ne "${GRAY}${L[sgm_send_more]}${NC}"
         read -r again
         
-        if [[ ! "$again" =~ ^[YyДдНн]$ ]]; then
+        # Enter (пусто) или y/д = отправить ещё; n/н = выход
+        if [[ "$again" =~ ^[nNтТ] ]]; then
             return
         fi
     done
@@ -3349,7 +3468,7 @@ menu_knowledge_base() {
                 echo -e "${GRAY}${L[kb_cancel_hint]}${NC}"
                 echo -ne "${CYAN}${L[kb_fname_prompt]}${NC}"
                 read -r newname
-                if [ -z "$newname" ] || [ "$newname" == "0" ]; then
+                if [ -z "$newname" ]; then
                     echo -e "${GRAY}${L[kb_cancelled]}${NC}"
                     sleep 1
                     continue
@@ -3374,7 +3493,8 @@ menu_knowledge_base() {
                 echo ""
                 echo -ne "${CYAN}${L[kb_edit_q]}${NC}"
                 read -r edit_confirm
-                if [[ "$edit_confirm" =~ ^[yYдД]$ ]]; then
+                # Enter (пусто) или y/д = да; n/н = нет
+                if [[ ! "$edit_confirm" =~ ^[nNтТ] ]]; then
                     sudo nano "$topics_file"
                     echo -e "${GREEN}${L[kb_saved]}${NC}"
                 fi
@@ -3389,7 +3509,8 @@ menu_knowledge_base() {
                     local del_name=$(basename "$del_file")
                     echo -ne "${RED}$(printf "${L[kb_del_confirm]}" "$del_name")${NC}"
                     read -r confirm
-                    if [[ "$confirm" =~ ^[yYдД]$ ]]; then
+                    # Enter (пусто) или y/д = да; n/н = нет
+                    if [[ ! "$confirm" =~ ^[nNтТ] ]]; then
                         rm -f "$del_file"
                         echo -e "${GREEN}${L[kb_deleted]}${NC}"
                         echo -e "${YELLOW}${L[kb_remove_topics]}${NC}"
@@ -3602,14 +3723,14 @@ show_users_list() {
         echo ""
         print_line
         echo -e "  ${GRAY}${L[log_enter_num_view]}${NC}"
-        echo -e "  ${GRAY}[0/Enter/ESC]${NC} ${GRAY}${L[log_back_hint]}${NC}"
+        echo -e "  ${GRAY}[ESC]${NC} ${GRAY}${L[log_back_hint]}${NC}"
         echo ""
         
         echo -ne "${CYAN}${L[log_number]}${NC}"
         local choice=$(read_number_or_esc)
         echo ""
         
-        if [[ "$choice" == "ESC" ]] || [[ "$choice" == "0" ]] || [[ -z "$choice" ]]; then
+        if [[ "$choice" == "ESC" ]] || [[ -z "$choice" ]]; then
             return
         fi
         
@@ -3691,7 +3812,7 @@ view_user_messages() {
         echo -ne "${CYAN}${L[log_choice]}${NC}"
         local choice=$(read_key)
         
-        if [[ "$choice" == "ESC" ]] || [[ "$choice" == "0" ]] || [[ "$choice" == "q" ]] || [[ "$choice" == "Q" ]]; then
+        if [[ "$choice" == "ESC" ]] || [[ -z "$choice" ]]; then
             rm -f "$tmp_file"
             return
         fi
@@ -3724,6 +3845,7 @@ search_by_nick() {
     search_nick=$(dialog --colors \
         --backtitle "RETICULUM CONTROL" \
         --title "${L[log_search_nick_title]}" \
+        --ok-label "${L[btn_open]}" --cancel-label "${L[btn_back]}" \
         --inputbox "${L[log_search_nick_p]}" 9 50 \
         3>&1 1>&2 2>&3)
     local rc=$?
@@ -3786,6 +3908,7 @@ search_by_address() {
     search_addr=$(dialog --colors \
         --backtitle "RETICULUM CONTROL" \
         --title "${L[log_search_addr_title]}" \
+        --ok-label "${L[btn_open]}" --cancel-label "${L[btn_back]}" \
         --inputbox "${L[log_search_addr_p]}" 10 56 \
         3>&1 1>&2 2>&3)
     local rc=$?
@@ -3904,7 +4027,7 @@ show_last_messages() {
         echo -ne "${CYAN}${L[log_choice]}${NC}"
         local choice=$(read_key)
         
-        if [[ "$choice" == "ESC" ]] || [[ "$choice" == "0" ]]; then
+        if [[ "$choice" == "ESC" ]] || [[ -z "$choice" ]]; then
             return
         fi
         
@@ -3987,7 +4110,7 @@ view_admin_logs() {
         echo -ne "${CYAN}${L[log_choice]}${NC}"
         local choice=$(read_key)
         
-        if [[ "$choice" == "ESC" ]] || [[ "$choice" == "0" ]]; then
+        if [[ "$choice" == "ESC" ]] || [[ -z "$choice" ]]; then
             return
         fi
         
@@ -4052,7 +4175,7 @@ view_log_file() {
         echo -ne "${CYAN}${L[log_choice]}${NC}"
         local choice=$(read_key)
         
-        if [[ "$choice" == "ESC" ]] || [[ "$choice" == "0" ]]; then
+        if [[ "$choice" == "ESC" ]] || [[ -z "$choice" ]]; then
             return
         fi
         
@@ -4163,6 +4286,7 @@ add_trusted_user() {
     user_hash=$(dialog --colors \
         --backtitle "RETICULUM CONTROL" \
         --title "${L[tu_add_title]}" \
+        --ok-label "${L[btn_open]}" --cancel-label "${L[btn_back]}" \
         --inputbox "${L[tu_add_prompt]}" 12 56 \
         3>&1 1>&2 2>&3)
     local rc=$?
@@ -4348,12 +4472,16 @@ menu_surgutbot() {
 
     while true; do
         local st=$(get_service_status "$service")
+        local bot_hash=$(get_lxmf_hash "${BOT_HOME}/config/identity")
         local STATUS
         if [ "$st" = "active" ]; then
             STATUS="\Z2● ${clean_name} ${L[st_running]}\Zn"
         else
             STATUS="\Z1● ${clean_name} ${L[st_stopped]}\Zn"
         fi
+        # Динамический LXMF-адрес бота в шапку
+        [ -n "$bot_hash" ] && STATUS="${STATUS}\n\Z7LXMF:\Zn ${bot_hash}"
+        STATUS="${STATUS}\n\Z7${L[cfg_file]}\Zn ${BOT_HOME}"
 
         dlg_menu "$clean_name" "$STATUS" "$DEF" \
             "1" "${C_START}${L[ss_m_start]}\Zn" \
@@ -4383,13 +4511,11 @@ menu_surgutbot() {
                 ;;
             3) restart_service "$service"; press_enter ;;
             4)
-                echo ""
-                echo -e "${CYAN}$(printf "${L[bot_logs_hdr]}" "$clean_name")${NC}"
-                sudo journalctl -u "$service" -f --no-pager -n 50
+                view_live_log "$(printf "${L[bot_logs_hdr]}" "$clean_name")" -u "$service" -f --no-pager -n 50
                 ;;
             5)
                 echo ""
-                sudo systemctl status "$service"
+                systemctl status "$service" --no-pager
                 press_enter
                 ;;
             6) show_bot_stats ;;
@@ -4442,7 +4568,7 @@ show_bot_stats() {
         
         # Всего пользователей
         local total_users=$(sqlite3 "$bot_db" "SELECT value FROM key_value WHERE key='stat_total_users'" 2>/dev/null || echo "0")
-        echo -e "  👥 ${L[bot_stat_total_users]} ${WHITE}${total_users:-0}${NC}"
+        echo -e "  ${L[bot_stat_total_users]} ${WHITE}${total_users:-0}${NC}"
         
         # Активные сегодня
         local today=$(date +%Y-%m-%d)
@@ -4524,6 +4650,7 @@ menu_rnode_settings() {
                 custom_timeout=$(dialog --colors \
                     --backtitle "RETICULUM CONTROL" \
                     --title "${L[rn_timeout_title]}" \
+                    --ok-label "${L[btn_open]}" --cancel-label "${L[btn_back]}" \
                     --inputbox "${L[rn_timeout_prompt]}" 11 50 \
                     3>&1 1>&2 2>&3)
                 local rc=$?
@@ -4541,6 +4668,7 @@ menu_rnode_settings() {
                 brightness=$(dialog --colors \
                     --backtitle "RETICULUM CONTROL" \
                     --title "${L[rn_bright_title]}" \
+                    --ok-label "${L[btn_open]}" --cancel-label "${L[btn_back]}" \
                     --inputbox "${L[rn_bright_prompt]}" 11 50 \
                     3>&1 1>&2 2>&3)
                 local rc=$?
@@ -4756,20 +4884,22 @@ menu_environment() {
                 press_enter
                 ;;
             4)
-                echo ""
-                echo -e "${YELLOW}${L[env_updating]}${NC}"
-                echo ""
-                if ensure_pypi_access; then
+                if verify_pin "${L[env_update_reason]}"; then
                     echo ""
-                    "$VENV_PATH/bin/pip" install --upgrade rns nomadnet lxmf
-                    log_action "UPDATED: Reticulum packages"
-                else
+                    echo -e "${YELLOW}${L[env_updating]}${NC}"
                     echo ""
-                    echo -e "${RED}${L[env_pypi_noaccess]}${NC}"
-                    echo -e "${GRAY}${L[env_check_inet]}${NC}"
-                    echo -e "${GRAY}${L[env_add_ip]}${NC}"
+                    if ensure_pypi_access; then
+                        echo ""
+                        "$VENV_PATH/bin/pip" install --upgrade rns nomadnet lxmf
+                        log_action "UPDATED: Reticulum packages"
+                    else
+                        echo ""
+                        echo -e "${RED}${L[env_pypi_noaccess]}${NC}"
+                        echo -e "${GRAY}${L[env_check_inet]}${NC}"
+                        echo -e "${GRAY}${L[env_add_ip]}${NC}"
+                    fi
+                    press_enter
                 fi
-                press_enter
                 ;;
             5)
                 echo ""
@@ -4784,7 +4914,9 @@ menu_environment() {
                 ;;
             6)
                 if [ -f ~/.reticulum/config ]; then
-                    ${EDITOR:-nano} ~/.reticulum/config
+                    if verify_pin "${L[env_editcfg_reason]}"; then
+                        ${EDITOR:-nano} ~/.reticulum/config
+                    fi
                 else
                     echo "${L[env_cfg_notfound_short]}"
                     press_enter
@@ -4860,6 +4992,7 @@ menu_ssh_settings() {
         clear
         case "$DLG_CHOICE" in
             1)
+                if ! verify_pin "${L[ssh_edit_reason]}"; then continue; fi
                 echo ""
                 echo -e "${CYAN}${L[ssh_edit_hdr]}${NC}"
                 echo ""
@@ -4874,6 +5007,7 @@ menu_ssh_settings() {
                 fi
                 ;;
             2)
+                if ! verify_pin "${L[ssh_restart_reason]}"; then continue; fi
                 echo ""
                 echo -e "${YELLOW}${L[ssh_restarting]}${NC}"
                 sudo systemctl restart sshd
@@ -4885,7 +5019,7 @@ menu_ssh_settings() {
                 ;;
             3)
                 echo ""
-                sudo systemctl status sshd
+                systemctl status sshd --no-pager
                 press_enter
                 ;;
             4)
@@ -4927,9 +5061,7 @@ menu_monitoring() {
         case "$DLG_CHOICE" in
             1) show_status ;;
             2)
-                echo ""
-                echo -e "${CYAN}${L[mon_logs_hdr]}${NC}"
-                sudo journalctl -u reticulum.service -u nomadnet.service -f --no-pager -n 30
+                view_live_log "${L[mon_logs_hdr]}" -u reticulum.service -u nomadnet.service -f --no-pager -n 30
                 ;;
             3)
                 echo ""
@@ -5134,6 +5266,52 @@ print(h.hex())
     fi
 }
 
+# Получить LXMF-адрес из произвольного identity-файла (например, бота)
+get_lxmf_hash() {
+    local identity_file="$1"
+    [ -f "$identity_file" ] || return
+    "$VENV_PATH/bin/python3" -c "
+import RNS
+identity = RNS.Identity.from_file('$identity_file')
+h = RNS.Destination.hash(identity, 'lxmf', 'delivery')
+print(h.hex())
+" 2>/dev/null
+}
+
+# Просмотр живого лога с выходом по ESC (вместо Ctrl+C).
+# Аргументы: $1 = заголовок (уже готовый текст), далее — аргументы journalctl.
+# journalctl запускается в фоне; нажатие ESC его останавливает и возвращает
+# в меню. Хвостовые байты автоповтора ESC дочищаются, чтобы не попасть в шелл.
+view_live_log() {
+    local header="$1"; shift
+    clear
+    echo ""
+    echo -e "${CYAN}${header}${NC}"
+    echo -e "${GRAY}${L[log_esc_hint]}${NC}"
+    echo ""
+
+    # journalctl в фоне, вывод — прямо в терминал.
+    # Скрипт уже работает под root (self-sudo в начале), поэтому sudo здесь
+    # не нужен — так $! указывает прямо на journalctl и его легко остановить.
+    journalctl "$@" &
+    local jpid=$!
+
+    # Ждём ESC; как только пришёл — гасим journalctl
+    local key
+    while kill -0 "$jpid" 2>/dev/null; do
+        if read -rsn1 -t 0.3 key 2>/dev/null; then
+            if [ "$key" = $'\e' ]; then
+                break
+            fi
+        fi
+    done
+    kill "$jpid" 2>/dev/null
+    wait "$jpid" 2>/dev/null
+    # Дочистить возможный хвост автоповтора ESC
+    while read -rsn1 -t 0.02 key 2>/dev/null; do :; done
+    clear
+}
+
 # Проверить приватная ли группа
 is_group_private() {
     local config_path="$1"
@@ -5162,7 +5340,7 @@ menu_all_groups() {
                 local service=$(get_group_service "$dir")
                 local status=$(get_service_status "$service")
                 local lock=""
-                is_group_private "$dir" && lock=" \Z3[private]\Zn"
+                is_group_private "$dir" && lock=" \Z3${L[ag_private]}\Zn"
 
                 if [ "$status" = "active" ]; then
                     items+=( "$i" "\Z2●\Zn ${name}${lock}" )
@@ -5252,15 +5430,15 @@ menu_single_group_full() {
         local service=$(get_group_service "$config_path")
         local group_hash=$(get_group_hash "$config_path")
         local lock=""
-        is_group_private "$config_path" && lock=" \Z3[private]\Zn"
+        is_group_private "$config_path" && lock=" \Z3${L[ag_private]}\Zn"
 
         # Статус в шапку
         local st=$(get_service_status "$service")
         local STATUS
         if [ "$st" = "active" ]; then
-            STATUS="\Z2● ${name}${lock} ${L[st_running]}\Zn\n"
+            STATUS="\Z2● ${name}${lock} \Z2${L[st_running]}\Zn\n"
         else
-            STATUS="\Z1● ${name}${lock} ${L[st_stopped]}\Zn\n"
+            STATUS="\Z1● ${name}${lock} \Z1${L[st_stopped]}\Zn\n"
         fi
         STATUS="${STATUS}\Z7LXMF:\Zn ${group_hash}\n\Z7${L[cfg_file]}\Zn ${config_path}"
 
@@ -5292,13 +5470,11 @@ menu_single_group_full() {
                 ;;
             3) restart_service "$service"; press_enter ;;
             4)
-                echo ""
-                echo -e "${CYAN}$(printf "${L[bot_logs_hdr]}" "$name")${NC}"
-                sudo journalctl -u "$service" -f --no-pager -n 50
+                view_live_log "$(printf "${L[bot_logs_hdr]}" "$name")" -u "$service" -f --no-pager -n 50
                 ;;
             5)
                 echo ""
-                sudo systemctl status "$service"
+                systemctl status "$service" --no-pager
                 press_enter
                 ;;
             6) show_group_members_generic "$config_path" ;;
@@ -5823,7 +5999,8 @@ except Exception:
     echo -e "  ${L[bd_msgs_in_backup]} ${WHITE}$count${NC}"
     echo -ne "${WHITE}${L[bd_restore_q]}${NC}"
     read -r confirm
-    if [[ ! "$confirm" =~ ^[YyДд]$ ]]; then
+    # Enter (пусто) или y/д = применить; только явное n/н = отмена
+    if [[ "$confirm" =~ ^[nNтТ] ]]; then
         echo -e "${GRAY}${L[bd_cancelled]}${NC}"
         press_enter
         return
@@ -5895,10 +6072,7 @@ menu_messageboard() {
                 press_enter
                 ;;
             4)
-                echo ""
-                echo -e "${CYAN}${L[mb_logs_hdr]}${NC}"
-                echo ""
-                sudo journalctl -u messageboard.service -f --no-pager -n 50
+                view_live_log "${L[mb_logs_hdr]}" -u messageboard.service -f --no-pager -n 50
                 ;;
             5)
                 echo ""
@@ -5972,6 +6146,7 @@ with open('$BOARD_PATH', 'rb') as f:
                     block_hash=$(dialog --colors \
                         --backtitle "RETICULUM CONTROL" \
                         --title "${L[mb_block_title]}" \
+                        --ok-label "${L[btn_open]}" --cancel-label "${L[btn_back]}" \
                         --inputbox "${L[mb_block_prompt]}" 10 56 \
                         3>&1 1>&2 2>&3)
                     local rc=$?
@@ -6106,9 +6281,12 @@ main_menu() {
             "${f2b_item[@]}"
 
         # Пусто = Назад/Esc = выход
+        # Back / single ESC on the top menu = leave this rn process. If rn was
+        # launched from f2b, control returns to f2b naturally; if rn is the
+        # root process, it returns to the terminal. A quick double-ESC (handled
+        # in dlg_menu) exits straight to the terminal from any depth.
         if [ -z "$DLG_CHOICE" ]; then
             clear
-            echo -e "\n${CYAN}${L[main_finished]}${NC}\n"
             exit 0
         fi
         DEF_MAIN="$DLG_CHOICE"
@@ -6129,7 +6307,9 @@ main_menu() {
             8) menu_pin ;;
             9)
                 if [ -x /usr/local/bin/f2b ]; then
-                    exec /usr/local/bin/f2b
+                    # Nested call (not exec): leaving f2b returns here to rn.
+                    /usr/local/bin/f2b
+                    clear
                 else
                     dlg_msg "\n\Z1${L[f2b_notfound]}\Zn"
                 fi
@@ -6198,6 +6378,19 @@ case "$arg" in
     status)
         for service in "${SERVICES[@]}"; do
             print_service_status "$service"
+        done
+        # Динамические группы (созданные через бота): lxmf_group_*
+        for dir in /root/.config/lxmf_group_*; do
+            [ -d "$dir" ] && [ -f "$dir/identity" ] || continue
+            gname=$(get_group_display_name "$dir")
+            gservice=$(get_group_service "$dir")
+            glock=""
+            is_group_private "$dir" && glock=" ${YELLOW}${L[ag_private]}${NC}"
+            if [ "$(get_service_status "$gservice")" = "active" ]; then
+                echo -e "  ${GREEN}●${NC} ${gname}${glock} ${GREEN}${L[st_running]}${NC}"
+            else
+                echo -e "  ${RED}●${NC} ${gname}${glock} ${RED}${L[st_stopped]}${NC}"
+            fi
         done
         ;;
     start)

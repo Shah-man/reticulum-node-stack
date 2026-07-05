@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# Lower ncurses' ESC recognition delay (default 1000ms) so a lone ESC in
+# dialog reacts almost instantly instead of feeling laggy.
+export ESCDELAY="${ESCDELAY:-50}"
+
 # ============================================
 #   FAIL2BAN MANAGER
 #   v2.0 - с recidive и таймерами
@@ -16,7 +20,7 @@ GRAY='\033[0;37m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-F2B_PASS_FILE="/etc/f2b.secret"
+F2B_PASS_FILE="/root/.rn_pin"   # общий PIN-файл с rn
 
 # ══════════════════════════════════════════════════════════════════
 # Язык интерфейса (синхронизирован с rn через тот же .rn_lang)
@@ -64,7 +68,7 @@ if [ "$LANG_F2B" = "en" ]; then
     L[wrong_pass]="✗ Wrong password"
     L[pass_prompt]="Password:"
     L[pass_notfound]="✗ Password file not found: %s"
-    L[pass_create]="Create it: echo 'password' > %s && chmod 600 %s"
+    L[pass_create]="Set a PIN in rn first (it is shared): run 'rn' and set the PIN"
     L[esc_cancel]="(ESC = cancel)"
     L[enter_pass]="🔑 Enter password: "
     L[d_days]="d"
@@ -140,6 +144,7 @@ if [ "$LANG_F2B" = "en" ]; then
     L[rn_notfound2]="rn script not found"
     L[btn_open]="Open"
     L[btn_back]="Back"
+    L[m_quit]="Exit"
     L[banned_hdr]="🚫 BANNED IPs"
     L[no_banned]="No banned IPs"
     L[jail_col]="Jail"
@@ -154,13 +159,11 @@ if [ "$LANG_F2B" = "en" ]; then
     L[attempts]="attempts"
     L[no_data]="No data"
     L[unban_hdr]="🔓 UNBAN IP"
-    L[enter_ip_unban]="Enter the IP to unban (0 = cancel):"
     L[ip_prompt]="IP:"
     L[cancelled]="Cancelled"
     L[unbanned_ok]="✓ IP %s unbanned"
     L[unban_fail]="✗ Failed to unban (check the IP)"
     L[ban_hdr]="🔒 BAN IP MANUALLY"
-    L[enter_ip_ban]="Enter the IP to ban (0 = cancel):"
     L[which_jail]="Which jail?"
     L[ban_done]="✓ IP %s banned in %s"
     L[ban_fail]="✗ Failed to ban"
@@ -197,7 +200,7 @@ else
     L[wrong_pass]="✗ Неверный пароль"
     L[pass_prompt]="Пароль:"
     L[pass_notfound]="✗ Файл с паролем не найден: %s"
-    L[pass_create]="Создай его: echo 'пароль' > %s && chmod 600 %s"
+    L[pass_create]="Сначала задай PIN в rn (он общий): запусти 'rn' и установи PIN"
     L[esc_cancel]="(ESC = отмена)"
     L[enter_pass]="🔑 Введи пароль: "
     L[d_days]="д"
@@ -273,6 +276,7 @@ else
     L[rn_notfound2]="Скрипт rn не найден"
     L[btn_open]="Открыть"
     L[btn_back]="Назад"
+    L[m_quit]="Выход"
     L[banned_hdr]="🚫 ЗАБЛОКИРОВАННЫЕ IP"
     L[no_banned]="Нет заблокированных IP"
     L[jail_col]="Jail"
@@ -287,13 +291,11 @@ else
     L[attempts]="попыток"
     L[no_data]="Нет данных"
     L[unban_hdr]="🔓 РАЗБЛОКИРОВКА IP"
-    L[enter_ip_unban]="Введи IP для разблокировки (0 = отмена):"
     L[ip_prompt]="IP:"
     L[cancelled]="Отменено"
     L[unbanned_ok]="✓ IP %s разблокирован"
     L[unban_fail]="✗ Не удалось разблокировать (проверь IP)"
     L[ban_hdr]="🔒 БЛОКИРОВКА IP ВРУЧНУЮ"
-    L[enter_ip_ban]="Введи IP для блокировки (0 = отмена):"
     L[which_jail]="В какой jail?"
     L[ban_done]="✓ IP %s заблокирован в %s"
     L[ban_fail]="✗ Не удалось заблокировать"
@@ -347,14 +349,60 @@ dlg_menu() {
     local items=("$@")
     local def=()
     [ -n "$default" ] && def=(--default-item "$default")
+
+    # ── Dynamic sizing (same logic as rn) ─────────────────────────────
+    # Size the dialog to show every menu row without scrolling, capped to
+    # the real terminal size so it never overflows on small terminals.
+    local n_items=$(( ${#items[@]} / 2 ))
+
+    local term_lines="${LINES:-0}"
+    local term_cols="${COLUMNS:-0}"
+    if [ "$term_lines" -le 0 ] 2>/dev/null; then
+        term_lines=$(tput lines 2>/dev/null || echo 24)
+    fi
+    if [ "$term_cols" -le 0 ] 2>/dev/null; then
+        term_cols=$(tput cols 2>/dev/null || echo 80)
+    fi
+
+    local status_lines=1
+    if [ -n "$status" ]; then
+        local nl_count
+        nl_count=$(printf '%s' "$status" | grep -o '\\n' | wc -l 2>/dev/null || echo 0)
+        status_lines=$(( nl_count + 1 ))
+    fi
+
+    local chrome=$(( 7 + status_lines ))
+    local height=$(( chrome + n_items ))
+    local max_h=$(( term_lines - 1 ))
+    [ "$height" -gt "$max_h" ] && height=$max_h
+    [ "$height" -lt 10 ] && height=10
+
+    local menu_h=$(( height - chrome ))
+    [ "$menu_h" -lt 1 ] && menu_h=1
+    [ "$menu_h" -gt "$n_items" ] && menu_h=$n_items
+
+    local width=70
+    local max_w=$(( term_cols - 4 ))
+    [ "$width" -gt "$max_w" ] && width=$max_w
+    [ "$width" -lt 40 ] && width=40
+
     DLG_CHOICE=$(dialog --colors \
         --backtitle "FAIL2BAN MANAGER" \
         --title " $title " \
         --ok-label "${L[btn_open]}" --cancel-label "${L[btn_back]}" \
         "${def[@]}" \
-        --menu "$status" 0 0 0 \
+        --menu "$status" "$height" "$width" "$menu_h" \
         "${items[@]}" \
         3>&1 1>&2 2>&3)
+    local dlg_rc=$?
+
+    # ── Back vs ESC ───────────────────────────────────────────────────
+    # rc 1 = Back button, rc 255 = ESC — both step back one level instantly
+    # (ESCDELAY is lowered at the top). Tap ESC a few times to walk out to
+    # the terminal from a deep menu.
+    if [ "$dlg_rc" -eq 255 ]; then
+        DLG_CHOICE=""
+    fi
 }
 dlg_msg() { dialog --colors --msgbox "$1" 0 0; }
 
@@ -384,7 +432,7 @@ read_key() {
 check_password() {
   if [ ! -f "$F2B_PASS_FILE" ]; then
     echo -e "  ${RED}$(printf "${L[pass_notfound]}" "$F2B_PASS_FILE")${NC}"
-    echo -e "  ${YELLOW}$(printf "${L[pass_create]}" "$F2B_PASS_FILE" "$F2B_PASS_FILE")${NC}"
+    echo -e "  ${YELLOW}$(printf "${L[pass_create]}")${NC}"
     sleep 2
     return 1
   fi
@@ -833,10 +881,12 @@ main_menu() {
       "8" "\Z4${L[mm_config]}\Zn" \
       "${rn_item[@]}"
 
-    # Пусто = Back/Esc = выход
+    # Back / single ESC on the top menu = leave this f2b process. If f2b was
+    # launched from rn, control returns to rn naturally; if f2b is the root
+    # process, it returns to the terminal. A quick double-ESC (handled in
+    # dlg_menu) exits straight to the terminal from any depth.
     if [ -z "$DLG_CHOICE" ]; then
       clear
-      echo -e "\n  ${CYAN}${L[session_end]}${NC}\n"
       exit 0
     fi
     DEF="$DLG_CHOICE"
@@ -853,7 +903,9 @@ main_menu() {
       8) edit_config ;;
       9) 
         if [ -x "/usr/local/bin/rn" ]; then
-          exec /usr/local/bin/rn --skip-pin
+          # Nested call (not exec): leaving rn returns here to f2b.
+          /usr/local/bin/rn --skip-pin
+          clear
         else
           dlg_msg "\n\Z1${L[rn_notfound2]}\Zn"
         fi
