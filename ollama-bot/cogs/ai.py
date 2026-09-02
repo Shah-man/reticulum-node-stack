@@ -6,6 +6,7 @@ import os
 import json
 import requests
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from lxmfy.attachments import Attachment, AttachmentType
 from lxmfy import command
 
@@ -27,15 +28,16 @@ SYSTEM_PROMPT = os.getenv(
     "CRITICAL RULE: Detect the language of each user message and respond ONLY in that exact language. "
     "Russian message = Russian response. English message = English response. Chinese message = Chinese response. "
     "Never switch languages unless explicitly asked. "
-    "Keep responses concise. Plain text only, no markdown. "
+    "Keep responses concise. Plain text only, no markdown. Emoji are welcome — use them naturally to sound warm and friendly. "
     "When user asks about weather or forecast: do NOT give weather data yourself. Instead respond warmly like a friend — write a natural friendly sentence and mention the command /метео <город> in Russian or /meteo <city> in English. Never output just a bare command. "
     "When user asks about current time or date or time in any city: do NOT answer directly or try to calculate time yourself. Instead respond warmly and mention the command /время <город> in Russian or /time <city> in English. Example: 'Чтобы узнать точное время, используй /время Сургут' or 'To get exact time, use /time London'. Never try to calculate timezone yourself."
     "Always stay polite, warm and professional. Never use swear words, rude or harsh expressions. Be like a friendly helpful colleague."
     "Never ask the user to repeat or clarify what they already asked if you have already answered their question."
     "Always write city names, people names and proper nouns with a capital letter. CRITICAL: User names must ALWAYS start with a capital letter."
     "CRITICAL: NEVER invent or mention passwords, access codes, PIN codes or any authentication credentials. If someone asks about a password — say that no password is required unless it is explicitly stated in the KNOWLEDGE BASE."
+    "CRITICAL: NEVER invent device specifications, commands or technical facts that are not in your knowledge base. If asked about hardware, a command or a protocol you do not have information about, say so directly instead of making up specs. "
     "IMPORTANT: MeshTalk does not exist! This is a wrong name. The correct names are Meshtastic and MeshCore. Never say or write MeshTalk under any circumstances."
-    "On first message: if user sends a greeting — ask their name. If user asks a question — answer it first, don't interrupt with name request. If asked about unknown hardware that is not in your knowledge base, say I don't have information about this device instead of making up specs. Remember their name and use it naturally in conversation — not in every sentence, but occasionally to make the conversation feel personal. Based on the name, determine the gender and use correct grammatical gender forms in the language you are speaking."
+    "On first message: if user sends a greeting — ask their name. If user asks a question — answer it first, don't interrupt with name request. Remember their name and use it naturally in conversation — not in every sentence, but occasionally to make the conversation feel personal. Based on the name, determine the gender and use correct grammatical gender forms in the language you are speaking."
 )
 
 MAX_HISTORY = int(os.getenv("MAX_HISTORY", "10"))
@@ -317,6 +319,70 @@ WELCOME_MESSAGE = """
 
 /help или /? - список команд"""
 
+WELCOME_MESSAGE_EN = """
+———
+🤖 A bit about me:
+I am an AI assistant on the Reticulum network.
+Running on the local gemma2:9b model (Ollama).
+All replies are generated locally — no internet, fully private!
+What I can help with:
+- Answering questions on any topic
+- Data analysis and interpretation
+- Help with code and texts
+- Translation into any language
+- Exact UTC time (/time)
+- Weather forecast (/meteo <city>)
+- RNode firmware for devices (/files)
+- Reticulum documentation
+- Reticulum group management
+/help or /? - list of commands"""
+
+HELP_MESSAGE = """Команды:
+/время <город> - точное время в городе
+/time <city> - exact time in city
+/метео <город> - погода и прогноз на 3 дня
+/meteo <city> - weather forecast (English)
+/clear - очистить историю диалога
+/reset - полный сброс сессии
+/model - активная модель
+/info - информация о боте
+/files - список прошивок и файлов
+/get <имя> - скачать файл
+/help или /? - список команд
+
+Группы (нужен доступ):
+/groups - список групп
+/group <название> - инфо о группе
+/newgroup <название> - создать группу
+/newgroup <название> private - создать приватную группу
+/delgroup <название> - удалить группу
+/renamegroup <старое> | <новое> - переименовать группу
+/setprivate <название> - сделать группу приватной
+/setpublic <название> - сделать группу публичной"""
+
+HELP_MESSAGE_EN = """Commands:
+/time <city> - exact time in city
+/время <город> - точное время в городе (Russian)
+/meteo <city> - weather and 3-day forecast
+/метео <город> - прогноз погоды (Russian)
+/clear - clear conversation history
+/reset - full session reset
+/model - active model
+/info - about this bot
+/files - list of firmware and files
+/get <name> - download a file
+/help or /? - list of commands
+
+Groups (access required):
+/groups - list groups
+/group <name> - group info
+/newgroup <name> - create a group
+/newgroup <name> private - create a private group
+/delgroup <name> - delete a group
+/renamegroup <old> | <new> - rename a group
+/setprivate <name> - make a group private
+/setpublic <name> - make a group public"""
+
 INFO_MESSAGE = """SurgutBot86 v1.0
 AI модель: gemma2:9b (Ollama)
 Платформа: Reticulum / LXMF
@@ -329,187 +395,174 @@ SURGUT GROUP:
 868671a17736efbf68e99cacd1682026"""
 
 
+def _wind_arrow(deg):
+    dirs = ["С","СВ","В","ЮВ","Ю","ЮЗ","З","СЗ"]
+    return dirs[round(deg / 45) % 8]
+
+
+def _wind_arrow_en(deg):
+    dirs = ["N","NE","E","SE","S","SW","W","NW"]
+    return dirs[round(deg / 45) % 8]
+
+
+_SYMBOL_RU = {
+    "clearsky": "ясно", "fair": "малообл", "partlycloudy": "перем обл",
+    "cloudy": "пасмурно", "fog": "туман",
+    "lightrainshowers": "небол дождь", "rainshowers": "дождь", "heavyrainshowers": "сильн дождь",
+    "lightrain": "небол дождь", "rain": "дождь", "heavyrain": "сильн дождь",
+    "lightsleet": "мокр снег", "sleet": "мокр снег", "heavysleet": "сильн мокр снег",
+    "lightsnowshowers": "небол снег", "snowshowers": "снег", "heavysnowshowers": "сильн снег",
+    "lightsnow": "небол снег", "snow": "снег", "heavysnow": "сильн снег",
+    "thunderstorm": "гроза", "rainandthunder": "дождь+гроза", "snowandthunder": "снег+гроза",
+}
+
+_SYMBOL_EN = {
+    "clearsky": "Clear sky", "fair": "Fair", "partlycloudy": "Partly cloudy",
+    "cloudy": "Overcast", "fog": "Fog",
+    "lightrainshowers": "Light rain showers", "rainshowers": "Rain showers", "heavyrainshowers": "Heavy rain showers",
+    "lightrain": "Light rain", "rain": "Rain", "heavyrain": "Heavy rain",
+    "lightsleet": "Light sleet", "sleet": "Sleet", "heavysleet": "Heavy sleet",
+    "lightsnowshowers": "Light snow showers", "snowshowers": "Snow showers", "heavysnowshowers": "Heavy snow showers",
+    "lightsnow": "Light snow", "snow": "Snow", "heavysnow": "Heavy snow",
+    "thunderstorm": "Thunderstorm", "rainandthunder": "Rain and thunder", "snowandthunder": "Snow and thunder",
+}
+
+
+def _symbol_base(code):
+    if not code:
+        return ""
+    return code.replace("_day", "").replace("_night", "").replace("_polartwilight", "")
+
+
+def _fetch_metno(lat, lon):
+    headers = {"User-Agent": "SurgutBot86/1.0 mesh@surgut86.local"}
+    r = requests.get(
+        "https://api.met.no/weatherapi/locationforecast/2.0/complete",
+        params={"lat": round(lat, 4), "lon": round(lon, 4)},
+        headers=headers, timeout=12,
+    )
+    r.raise_for_status()
+    return r.json()["properties"]["timeseries"]
+
+
+def _daily_from_metno(ts):
+    """Group met.no hourly timeseries into per-day summaries (UTC dates)."""
+    from collections import defaultdict
+    days = defaultdict(lambda: {"temps": [], "precip": 0.0, "syms": []})
+    for p in ts:
+        date = p["time"][:10]
+        det = p["data"]["instant"]["details"]
+        if "air_temperature" in det:
+            days[date]["temps"].append(det["air_temperature"])
+        block = p["data"].get("next_6_hours") or p["data"].get("next_1_hours")
+        if block:
+            pa = block.get("details", {}).get("precipitation_amount")
+            if pa:
+                days[date]["precip"] += pa
+            sym = block.get("summary", {}).get("symbol_code")
+            if sym:
+                days[date]["syms"].append(_symbol_base(sym))
+    return days
+
+
 def get_weather(city: str) -> str:
-    """Fetch weather and 3-day forecast using open-meteo.com"""
+    """Compact current weather + 3-day forecast (RU) for narrow channels (LoRa)."""
     try:
         geo = requests.get(
             f"https://geocoding-api.open-meteo.com/v1/search?name={city}&count=1&language=ru",
-            timeout=10
+            timeout=10,
         )
         geo_data = geo.json()
         if not geo_data.get("results"):
             return f"Город '{city}' не найден."
-
         result = geo_data["results"][0]
         lat = result["latitude"]
         lon = result["longitude"]
         city_name = result["name"]
-        tz = result.get("timezone", "UTC")
 
-        weather = requests.get(
-            f"http://api.open-meteo.com/v1/forecast"
-            f"?latitude={lat}&longitude={lon}"
-            f"&current=temperature_2m,relative_humidity_2m,windspeed_10m,winddirection_10m,weathercode"
-            f"&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,weathercode"
-            f"&timezone=UTC&forecast_days=3",
-            timeout=10
-        )
-        w = weather.json()
-        current = w["current"]
-        daily = w["daily"]
+        ts = _fetch_metno(lat, lon)
+        cur = ts[0]["data"]["instant"]["details"]
+        cur_block = ts[0]["data"].get("next_1_hours") or ts[0]["data"].get("next_6_hours") or {}
+        cur_sym = _symbol_base(cur_block.get("summary", {}).get("symbol_code", ""))
+        cur_desc = _SYMBOL_RU.get(cur_sym, "")
+        wind = _wind_arrow(cur.get("wind_from_direction", 0))
+        t = round(cur.get("air_temperature", 0))
+        hum = round(cur.get("relative_humidity", 0))
+        wspd = round(cur.get("wind_speed", 0))
 
-        weather_codes = {
-            0: "Ясное небо", 1: "Преимущественно ясно", 2: "Переменная облачность",
-            3: "Пасмурно", 45: "Туман", 48: "Изморозь", 51: "Лёгкая морось",
-            53: "Морось", 55: "Сильная морось", 61: "Лёгкий дождь", 63: "Дождь",
-            65: "Сильный дождь", 71: "Лёгкий снег", 73: "Снег", 75: "Сильный снег",
-            77: "Снежные зёрна", 80: "Ливень", 81: "Сильный ливень",
-            85: "Снегопад", 86: "Сильный снегопад", 95: "Гроза", 99: "Гроза с градом"
-        }
-
-        wcode = current.get("weathercode", 0)
-        wdesc = weather_codes.get(wcode, "Неизвестно")
-
-        # Получаем местное время города
-        try:
-            time_res = requests.get(f"https://timeapi.io/api/time/current/zone?timeZone={tz}", timeout=10)
-            time_data = time_res.json()
-            local_time = f"{time_data['date']} {time_data['time']}"
-        except:
-            local_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S") + " UTC"
-
+        dow_ru = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
         lines = [
-            f"ПРОГНОЗ ДЛЯ {city_name.upper()}:",
-            "=" * 43,
-            f"📍 GPS позиция: Широта: {lat} Долгота: {lon}",
-            "=" * 43,
-            f"🕐 Местное время: {local_time}",
-            "=" * 43,
+            f"{city_name}: {t}\u00b0C, {cur_desc}",
+            f"влажн {hum}%, ветер {wspd} м/с {wind}",
             "",
-            ">> ТЕКУЩАЯ ПОГОДА:",
-            f"🌡️ Температура: {current['temperature_2m']}°C",
-            f"💧 Влажность: {current.get('relative_humidity_2m', 'Н/Д')}%",
-            f"💨 Скорость ветра: {current['windspeed_10m']} км/ч",
-            f"🧭 Направление ветра: {current['winddirection_10m']}°",
-            f"☁️ Состояние: {wdesc}",
-            "-" * 40,
-            "",
-            ">> ПРОГНОЗ НА 3 ДНЯ:",
         ]
-
-        days_ru = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
-        for i in range(3):
-            date_str = daily["time"][i]
-            dt = datetime.strptime(date_str, "%Y-%m-%d")
-            day_name = days_ru[dt.weekday()]
-            dcode = daily["weathercode"][i]
-            ddesc = weather_codes.get(dcode, "Неизвестно")
-            lines += [
-                f"📅 [{dt.strftime('%d.%m.%Y')}] {day_name}:",
-                f"🔼 Макс: {daily['temperature_2m_max'][i]}°C",
-                f"🔽 Мин: {daily['temperature_2m_min'][i]}°C",
-                f"💧 Осадки: {daily['precipitation_sum'][i]} мм",
-                f"☁️ Погода: {ddesc}",
-                "",
-            ]
-
-        lines.append("=" * 40)
+        daily = _daily_from_metno(ts)
+        for date in sorted(daily.keys())[:3]:
+            info = daily[date]
+            if not info["temps"]:
+                continue
+            dt = datetime.strptime(date, "%Y-%m-%d")
+            dow = dow_ru[dt.weekday()]
+            sym = max(set(info["syms"]), key=info["syms"].count) if info["syms"] else ""
+            ddesc = _SYMBOL_RU.get(sym, "")
+            tmin = round(min(info["temps"]))
+            tmax = round(max(info["temps"]))
+            pr = round(info["precip"])
+            prtxt = f", {pr}мм" if pr > 0 else ""
+            lines.append(f"{dow} {dt.strftime('%d.%m.%Y')}: от {tmin} до {tmax}\u00b0C, {ddesc}{prtxt}")
         return "\n".join(lines)
-
     except Exception as e:
-        return f"Ошибка получения погоды: {str(e)}"
-
+        return f"Ошибка погоды: {str(e)}"
 
 
 def get_weather_en(city: str) -> str:
-    """Fetch weather and 3-day forecast in English using open-meteo.com"""
+    """Compact current weather + 3-day forecast (EN) for narrow channels (LoRa)."""
     try:
         geo = requests.get(
             f"https://geocoding-api.open-meteo.com/v1/search?name={city}&count=1&language=en",
-            timeout=10
+            timeout=10,
         )
         geo_data = geo.json()
         if not geo_data.get("results"):
             return f"City '{city}' not found."
-
         result = geo_data["results"][0]
         lat = result["latitude"]
         lon = result["longitude"]
         city_name = result["name"]
-        tz = result.get("timezone", "UTC")
 
-        weather = requests.get(
-            f"http://api.open-meteo.com/v1/forecast"
-            f"?latitude={lat}&longitude={lon}"
-            f"&current=temperature_2m,relative_humidity_2m,windspeed_10m,winddirection_10m,weathercode"
-            f"&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,weathercode"
-            f"&timezone=UTC&forecast_days=3",
-            timeout=10
-        )
-        w = weather.json()
-        current = w["current"]
-        daily = w["daily"]
+        ts = _fetch_metno(lat, lon)
+        cur = ts[0]["data"]["instant"]["details"]
+        cur_block = ts[0]["data"].get("next_1_hours") or ts[0]["data"].get("next_6_hours") or {}
+        cur_sym = _symbol_base(cur_block.get("summary", {}).get("symbol_code", ""))
+        cur_desc = _SYMBOL_EN.get(cur_sym, "")
+        wind = _wind_arrow_en(cur.get("wind_from_direction", 0))
+        t = round(cur.get("air_temperature", 0))
+        hum = round(cur.get("relative_humidity", 0))
+        wspd = round(cur.get("wind_speed", 0))
 
-        weather_codes = {
-            0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy",
-            3: "Overcast", 45: "Fog", 48: "Icy fog", 51: "Light drizzle",
-            53: "Drizzle", 55: "Heavy drizzle", 61: "Light rain", 63: "Rain",
-            65: "Heavy rain", 71: "Light snow", 73: "Snow", 75: "Heavy snow",
-            77: "Snow grains", 80: "Rain shower", 81: "Heavy shower",
-            85: "Snow shower", 86: "Heavy snow shower", 95: "Thunderstorm", 99: "Thunderstorm with hail"
-        }
-
-        wcode = current.get("weathercode", 0)
-        wdesc = weather_codes.get(wcode, "Unknown")
-
-        # Получаем местное время города
-        try:
-            time_res = requests.get(f"https://timeapi.io/api/time/current/zone?timeZone={tz}", timeout=10)
-            time_data = time_res.json()
-            local_time = f"{time_data['date']} {time_data['time']}"
-        except:
-            local_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S") + " UTC"
-
+        dow_en = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
         lines = [
-            f"FORECAST FOR {city_name.upper()}:",
-            "=" * 43,
-            f"GPS: Lat: {lat} Lon: {lon}",
-            "=" * 43,
-            f"🕐 Local time: {local_time}",
-            "=" * 43,
+            f"{city_name}: {t}\u00b0C, {cur_desc}",
+            f"hum {hum}%, wind {wspd} m/s {wind}",
             "",
-            ">> CURRENT WEATHER:",
-            f"Temperature: {current['temperature_2m']}°C",
-            f"Humidity: {current.get('relative_humidity_2m', 'N/A')}%",
-            f"Wind speed: {current['windspeed_10m']} km/h",
-            f"Wind direction: {current['winddirection_10m']}°",
-            f"Condition: {wdesc}",
-            "-" * 40,
-            "",
-            ">> 3-DAY FORECAST:",
         ]
-
-        days_en = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        for i in range(3):
-            date_str = daily["time"][i]
-            dt = datetime.strptime(date_str, "%Y-%m-%d")
-            day_name = days_en[dt.weekday()]
-            dcode = daily["weathercode"][i]
-            ddesc = weather_codes.get(dcode, "Unknown")
-            lines += [
-                f"[{dt.strftime('%d.%m.%Y')}] {day_name}:",
-                f"Max: {daily['temperature_2m_max'][i]}°C",
-                f"Min: {daily['temperature_2m_min'][i]}°C",
-                f"Precipitation: {daily['precipitation_sum'][i]} mm",
-                f"Condition: {ddesc}",
-                "",
-            ]
-
-        lines.append("=" * 40)
+        daily = _daily_from_metno(ts)
+        for date in sorted(daily.keys())[:3]:
+            info = daily[date]
+            if not info["temps"]:
+                continue
+            dt = datetime.strptime(date, "%Y-%m-%d")
+            dow = dow_en[dt.weekday()]
+            sym = max(set(info["syms"]), key=info["syms"].count) if info["syms"] else ""
+            ddesc = _SYMBOL_EN.get(sym, "")
+            tmin = round(min(info["temps"]))
+            tmax = round(max(info["temps"]))
+            pr = round(info["precip"])
+            prtxt = f", {pr}mm" if pr > 0 else ""
+            lines.append(f"{dow} {dt.strftime('%d.%m.%Y')}: {tmin} to {tmax}\u00b0C, {ddesc}{prtxt}")
         return "\n".join(lines)
-
     except Exception as e:
-        return f"Error getting weather: {str(e)}"
+        return f"Weather error: {str(e)}"
 
 
 def get_city_time(city: str, lang: str = "ru") -> str:
@@ -533,19 +586,11 @@ def get_city_time(city: str, lang: str = "ru") -> str:
         country = result.get("country", "")
         tz = result.get("timezone", "UTC")
         
-        # Шаг 2: Получаем точное время для этого timezone через timeapi.io
-        time_url = f"https://timeapi.io/api/time/current/zone?timeZone={tz}"
-        time_res = requests.get(time_url, timeout=10)
-        time_data = time_res.json()
-        
-        time_str = time_data["time"]  # "01:15"
-        date_str = time_data["date"]  # "03/11/2026"
-        
-        # Вычисляем UTC offset
-        utc_offset = time_data.get("utcOffset", "")
-        if not utc_offset:
-            # Попробуем получить из timeZone
-            utc_offset = tz
+        # Шаг 2: Вычисляем точное время локально через zoneinfo
+        # (системные часы синхронизированы по NTP, внешний сервис не нужен)
+        now = datetime.now(ZoneInfo(tz))
+        time_str = now.strftime("%H:%M")       # "01:15"
+        date_str = now.strftime("%m/%d/%Y")    # "03/11/2026"
         
         if lang == "ru":
             return f"🕐 Время в {city_name} ({country}):\n{date_str} {time_str}\nЧасовой пояс: {tz}"
@@ -788,7 +833,7 @@ class AICog:
                 # Сбрасываем историю после ответа
                 self.bot.storage.set(f"history_{ctx.sender}", [])
             elif first_message:
-                ctx.reply(reply + WELCOME_MESSAGE)
+                ctx.reply(reply + (WELCOME_MESSAGE if detect_language(prompt) == "Russian" else WELCOME_MESSAGE_EN))
             elif history_warning:
                 ctx.reply(reply + history_warning)
             else:
@@ -969,6 +1014,18 @@ class AICog:
     @command(name="help")
     def help(self, ctx):
         """Show commands."""
+        lang = "Russian"
+        try:
+            hist = self._get_history(ctx.sender)
+            for m in reversed(hist):
+                if m.get("role") == "user" and m.get("content"):
+                    lang = detect_language(m["content"])
+                    break
+        except Exception:
+            pass
+        ctx.reply(HELP_MESSAGE if lang == "Russian" else HELP_MESSAGE_EN)
+
+    def _help_unused(self, ctx):
         ctx.reply(
     "Команды:\n"
     "/время <город> - точное время в городе\n"

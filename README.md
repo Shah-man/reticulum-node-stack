@@ -147,7 +147,7 @@ The core node (Reticulum, propagation, groups, board, management tools) is light
 
 The **AI bot** is the demanding part and is optional:
 
-- **GPU**: NVIDIA with ≥ 10 GB VRAM (`gemma2:9b` uses ~8–9 GB; tested on an RTX 4090). If you run a mining rig, the card you already have is very likely enough. CPU-only works but expect ~30–120 s per reply — not recommended for live use.
+- **GPU**: NVIDIA with ≥ 8 GB VRAM (`gemma2:9b` uses ~6.6 GB with a recent Ollama build; tested on an RTX 4090). If you run a mining rig, the card you already have is very likely enough. CPU-only works but expect ~30–120 s per reply — not recommended for live use.
 - **RAM**: 16 GB minimum, 32 GB recommended when running the bot.
 - **Disk**: ~20 GB free (model + stack + room for logs and propagation cache to grow).
 - **Network**: a static public IP is strongly recommended for the propagation node and TCP peering.

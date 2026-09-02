@@ -1217,7 +1217,7 @@ install_ollama_and_bot() {
     printf -v _m "${L[model_ready]}" "$model"; log_ok "$_m"
 
     # Bot code
-    local bot_src="$REPO_DIR/bot"
+    local bot_src="$REPO_DIR/ollama-bot"
     if [[ -d "$bot_src" ]]; then
         printf -v _m "${L[bot_copy]}" "$BOT_DIR"; log_info "$_m"
         run "mkdir -p '$BOT_DIR'"

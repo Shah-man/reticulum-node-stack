@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.11.1] - 2026-09-02
+### Added
+- **`ollama-bot` — bilingual `/help` and welcome message.** The command list and the introductory "about me" block are now served in English or Russian, chosen from the language of the user's most recent message. Both versions list the Russian and English command variants (`/метео` and `/meteo`, `/время` and `/time`), so a user on either side still discovers the other set.
+- **`ollama-bot` — LXMF knowledge base entry.** A new `knowledge/lxmf.txt` documents the Lightweight Extensible Message Format: what it is, asynchronous delivery through propagation nodes, installation, clients, and the fact that no `rnmsg` command exists. Previously the bot had no dedicated LXMF topic and would invent expansions of the acronym.
+### Changed
+- **`ollama-bot` — knowledge base boundaries for devices.** `knowledge/devices.txt` now opens and closes with an explicit statement of what the base covers. Asked about a device outside the list, the bot says the information is missing and points to the vendor's documentation, instead of extrapolating specifications from similar models. Absence from the base is explicitly not a claim that the device does not exist.
+- **`ollama-bot` — system prompt.** The prohibition on inventing technical facts was widened from hardware to commands and protocols, and moved out of the trailing instruction block into its own line, where the model reliably picks it up. Emoji are now explicitly allowed alongside the existing plain-text rule.
+- **`README.md` — lower GPU requirement.** Recent Ollama builds run `gemma2:9b` in about 6.6 GB of VRAM instead of 8–9 GB, so the stated minimum drops from 10 GB to 8 GB.
+### Fixed
+- **`installret.sh` — bot source directory.** The installer looked for the bot in `$REPO_DIR/bot`, but the directory is named `ollama-bot`. The existence check failed silently, so the bot was skipped during installation without any error message.
+### Known issues
+- **`ollama-bot` — `/setmodel` is non-functional.** The command declares an argument, but `lxmfy` invokes command callbacks with the message object only, so the call fails before reaching the handler body and returns nothing — no reply, no log entry. Set the active model through `OLLAMA_MODEL` in the bot's `.env` and restart the service instead.
+
 ## [0.11.0] - 2026-07-05
 ### Added
 - **`installret.sh` — one-command installer / uninstaller.** A new top-level, bilingual (English / Russian) installer sets up the entire stack on a fresh machine: it detects the target user, installs the latest Reticulum stack (`rns`, `nomadnet`, `lxmf`) from PyPI, lays down configs, generates and enables all systemd services, and installs the `rn` / `f2b` management tools. The installer detects the distribution family and picks the right package manager automatically — `apt` for the Debian family (Debian, Ubuntu, Kali, HiveOS, Raspberry Pi OS, and derivatives) and `apt-get` for Alt Linux. The AI bot (Ollama + model) is optional and offered during installation.

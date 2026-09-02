@@ -1,0 +1,26 @@
+=== LXMF (Lightweight Extensible Message Format) ===
+
+Что это: формат обмена сообщениями поверх Reticulum. Автор — Марк Квист, тот же, кто создал Reticulum.
+Расшифровка: Lightweight Extensible Message Format. Никаких других расшифровок не существует.
+
+Главная особенность — асинхронная доставка. Сообщение можно отправить адресату, которого сейчас нет в сети. Оно сохранится на propagation node и придёт, когда получатель появится. Работает как почта, а не как онлайн-чат.
+
+Установка: pip install lxmf
+GitHub: https://github.com/markqvist/LXMF
+
+Клиенты с поддержкой LXMF: Columba, MeshChatX, NomadNet и другие.
+
+Адрес LXMF — 32-символьный хеш, идентификатор пользователя в сети. У каждого свой.
+
+Шифрование: end-to-end через Curve25519, как и во всём Reticulum. Propagation node хранит сообщения, но прочитать их не может.
+
+SurgutBot86 работает именно через LXMF — все сообщения боту идут по этому протоколу.
+
+Инструменты: LXMF-Tools (https://github.com/SebastianObi/LXMF-Tools), в том числе lxmf_distribution_group для групповых чатов.
+
+ВАЖНО: команды rnmsg не существует. Реальные команды Reticulum: rnsd, rnstatus, rnpath, rnprobe, rnodeconf, rncp, rnx. Сообщения отправляются через клиенты (Sideband, NomadNet), а не через команду в терминале.
+
+Правильное написание: LXMF. Варианты XLMF, XLM, LMF, ЛХМФ — ошибочные, так писать нельзя.
+
+Адрес LXMF создаётся автоматически клиентом (Columba, MeshChatX, NomadNet) при первом запуске. Команды для создания адреса не существует — ни /get lxmf, ни какой-либо другой. Бот прошивки раздаёт через /files и /get, адреса LXMF он не выдаёт.
+
