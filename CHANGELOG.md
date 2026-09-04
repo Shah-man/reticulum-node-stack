@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.11.2] - 2026-09-04
+### Fixed
+- **`ollama-bot` — attachments no longer produce blank prompts.** LXMF messages carrying only an attachment (image, file, voice, location) have an empty `content` field. The handler passed that empty string straight to the model, which then answered from conversation history alone — replying "What's your name?" or "Just ask away" to a picture — and wrote empty lines into the message log. Such messages now receive a short notice that the bot only handles text, in the language of the user's last text message — or in both languages when the attachment is the very first message and there is no history to judge by — and never reach the model. If a client puts the text in the LXMF `title` field instead of `content`, it is now picked up from there.
+
 ## [0.11.1] - 2026-09-02
 ### Added
 - **`ollama-bot` — bilingual `/help` and welcome message.** The command list and the introductory "about me" block are now served in English or Russian, chosen from the language of the user's most recent message. Both versions list the Russian and English command variants (`/метео` and `/meteo`, `/время` and `/time`), so a user on either side still discovers the other set.

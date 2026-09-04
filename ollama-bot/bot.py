@@ -37,6 +37,29 @@ groups_cog = bot.cogs.get("GroupsCog")
 @bot.on_message()
 def handle_message(sender, message):
     content = message.content.decode('utf-8')
+    if not content.strip():
+        title = getattr(message, "title", b"")
+        if isinstance(title, bytes):
+            title = title.decode("utf-8", errors="ignore")
+        content = (title or "").strip()
+    if not content.strip():
+        lang = None
+        try:
+            from cogs.ai import detect_language
+            hist = ai_cog._get_history(sender)
+            for m in reversed(hist):
+                if m.get("role") == "user" and m.get("content"):
+                    lang = detect_language(m["content"])
+                    break
+        except Exception:
+            pass
+        if lang == "Russian":
+            bot.send(sender, "Я работаю только с текстом — вложения обрабатывать не умею. Напиши вопрос словами.")
+        elif lang:
+            bot.send(sender, "I only work with text — attachments are not supported. Please write your question.")
+        else:
+            bot.send(sender, "Я работаю только с текстом — вложения обрабатывать не умею. Напиши вопрос словами.\nI only work with text — attachments are not supported. Please write your question.")
+        return
     if not content.startswith("/"):
         class Ctx:
             pass
