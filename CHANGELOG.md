@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.11.3] - 2026-09-04
+### Fixed
+- **`ollama-bot` — attachment-only messages are logged again.** The 0.11.2 fix returned before reaching the logging code, so a message carrying only an attachment left no trace at all in `messages.log` — neither the incoming message nor the notice sent back. Both are now written, so the operator sees the exchange in `rn` and in the log file: an `IN` line marking the attachment and the `OUT` line with the reply.
+
 ## [0.11.2] - 2026-09-04
 ### Fixed
 - **`ollama-bot` — attachments no longer produce blank prompts.** LXMF messages carrying only an attachment (image, file, voice, location) have an empty `content` field. The handler passed that empty string straight to the model, which then answered from conversation history alone — replying "What's your name?" or "Just ask away" to a picture — and wrote empty lines into the message log. Such messages now receive a short notice that the bot only handles text, in the language of the user's last text message — or in both languages when the attachment is the very first message and there is no history to judge by — and never reach the model. If a client puts the text in the LXMF `title` field instead of `content`, it is now picked up from there.

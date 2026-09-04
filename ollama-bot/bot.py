@@ -43,6 +43,11 @@ def handle_message(sender, message):
             title = title.decode("utf-8", errors="ignore")
         content = (title or "").strip()
     if not content.strip():
+        try:
+            from cogs.ai import log_message
+            log_message(sender, "[вложение без текста]", "IN")
+        except Exception:
+            pass
         lang = None
         try:
             from cogs.ai import detect_language
@@ -54,11 +59,17 @@ def handle_message(sender, message):
         except Exception:
             pass
         if lang == "Russian":
-            bot.send(sender, "Я работаю только с текстом — вложения обрабатывать не умею. Напиши вопрос словами.")
+            notice = "Я работаю только с текстом — вложения обрабатывать не умею. Напиши вопрос словами."
         elif lang:
-            bot.send(sender, "I only work with text — attachments are not supported. Please write your question.")
+            notice = "I only work with text — attachments are not supported. Please write your question."
         else:
-            bot.send(sender, "Я работаю только с текстом — вложения обрабатывать не умею. Напиши вопрос словами.\nI only work with text — attachments are not supported. Please write your question.")
+            notice = "Я работаю только с текстом — вложения обрабатывать не умею. Напиши вопрос словами.\nI only work with text — attachments are not supported. Please write your question."
+        bot.send(sender, notice)
+        try:
+            from cogs.ai import log_message
+            log_message(sender, notice, "OUT")
+        except Exception:
+            pass
         return
     if not content.startswith("/"):
         class Ctx:
